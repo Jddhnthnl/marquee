@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Signed in AND on the invite list (allowlist/<lowercase email>, readable only from the console).
+    function invited() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/allowlist/$(request.auth.token.email.lower()));
+    }
+
+    // Each account only sees its own data: users/<uid>/profiles/<profileId>, etc.
+    match /users/{uid}/{doc=**} {
+      allow read, write: if invited() && request.auth.uid == uid;
+    }
+  }
+}

@@ -144,6 +144,9 @@
   .style-row .slide { display: flex; align-items: center; gap: 14px; padding: 0 12px; }
   .style-row input { flex: 1; accent-color: var(--lamp); }
   .style-row output { min-width: 6ch; font-variant-numeric: tabular-nums; }
+  .style-row select { flex: 1; min-width: 0; padding: 8px 10px; border: 0; border-radius: 10px; background: rgba(237,230,216,.08); color: inherit; font: inherit; }
+  .style-row option { background: var(--petrol); }
+  .style-row .slide + .seasons { margin-top: 10px; }
   .seasons button[aria-pressed=true] { background: var(--paper); color: var(--petrol); font-weight: 700; }
   .seasons .dot { display: inline-block; width: 11px; height: 11px; margin-right: 7px; border-radius: 50%; vertical-align: -1px; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
   .menu .menu-style { border-top: 1px solid rgba(237,230,216,.12); border-radius: 0 0 7px 7px; margin-top: 4px; color: var(--dim); }
@@ -274,7 +277,7 @@
 </aside>
 
 <script type="module">
-import { PLAYBACK_DEFAULTS, SUB_COLORS, subProps, videoProps, pickSub, pickAudio, segmentAt, nextCardAt, fromChapters } from './playback.js';
+import { PLAYBACK_DEFAULTS, SUB_COLORS, SUB_FONTS, LANGS, subProps, videoProps, pickSub, pickAudio, segmentAt, nextCardAt, fromChapters } from './playback.js';
 const { invoke } = window.__TAURI__.core;
 const $ = (s) => document.querySelector(s);
 const cmd = (...args) => invoke('mpv_cmd', { args }).catch(() => null);
@@ -444,7 +447,7 @@ function openPanel(name, refresh) {
   closeMenus();
   panel = name;
   const body = $('#drawer-body');
-  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitle style', picture: 'Picture', info: info.name || 'Info' }[name];
+  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitles', picture: 'Picture', info: info.name || 'Info' }[name];
   if (name === 'episodes') {
     const eps = info.episodes || [];
     const seasons = [...new Set(eps.map((e) => e.season))];
@@ -480,8 +483,23 @@ function openPanel(name, refresh) {
     // live on the picture while you change it; saved to the profile (and every PC) on release
     const change = (patch, keep = true) => {
       info.settings = { ...o, ...info.settings, ...patch };
-      for (const [k, v] of subProps(opt())) cmd('set_property', k, v);
+      // language rules changed: let Marquee pick the track again even if you picked one by hand
+      if (Object.keys(patch).some((k) => /^sub(Lang|OnlyMine|Forced)/.test(k))) subChosen = false;
+      applySubs();
       if (keep) ask({ type: 'settings', patch });
+    };
+    const toggle = (key, label) => {
+      const b = el('button', { textContent: label });
+      b.setAttribute('aria-pressed', String(!!o[key]));
+      b.onclick = () => { change({ [key]: !o[key] }); openPanel('style', true); };
+      return b;
+    };
+    const langs = Object.entries(LANGS).map(([c, n]) => [c, n.at(-1)]).sort((a, b) => a[1].localeCompare(b[1]));
+    const lang = (key, label, none) => {
+      const sel = el('select', {}, ...[['', none], ...langs].map(([c, t]) => el('option', { value: c, textContent: t, selected: o[key] === c })));
+      sel.setAttribute('aria-label', label);
+      sel.onchange = () => change({ [key]: sel.value });
+      return sel;
     };
     const slider = (key, label, min, max, step, show) => {
       const out = el('output', { textContent: show(o[key]) });
@@ -499,12 +517,20 @@ function openPanel(name, refresh) {
         b.onclick = () => { change({ [key]: v }); openPanel('style', true); };
         return b;
       })));
+    // each font pill is set in its own face, so you see the choice before you make it; Bold sits with them
+    const font = choice('subFont', 'Font', SUB_FONTS);
+    font.querySelectorAll('button').forEach((b, i) => { if (SUB_FONTS[i][0]) b.style.fontFamily = `${SUB_FONTS[i][0]}, sans-serif`; });
+    font.lastChild.append(toggle('subBold', 'Bold'));
     body.replaceChildren(
       slider('subSize', 'Size', 50, 200, 10, (v) => `${v}%`),
       choice('subColor', 'Color', SUB_COLORS.map(([v, t]) => [v, t, v])),
       choice('subEdge', 'Edge', [['none', 'None'], ['shadow', 'Shadow'], ['outline', 'Outline'], ['box', 'Box']]),
       slider('subLift', 'Height', 0, 30, 1, (v) => (v ? `${v}% up` : 'Bottom')),
-      el('p', { className: 'empty', textContent: 'Saved to this profile. Languages and the rest are in Settings in Marquee.' }));
+      font,
+      el('div', { className: 'style-row' }, el('h3', { textContent: 'Language' }),
+        el('div', { className: 'slide' }, lang('subLang1', 'First choice', 'Whatever the file picks'), lang('subLang2', 'Then', 'No second choice')),
+        el('div', { className: 'seasons' }, toggle('subOnlyMine', 'Only my languages'), toggle('subForced', 'Forced subtitles'), toggle('subSdh', 'Hide sound descriptions'))),
+      el('p', { className: 'empty', textContent: 'Saved to this profile. Same options as Settings > Subtitles.' }));
   } else if (name === 'picture') { // this session only; the defaults are in Settings > Player
     const row = (key, label) => {
       const out = el('output', { textContent: pic[key] > 0 ? `+${pic[key]}` : String(pic[key]) });
@@ -594,7 +620,7 @@ function openMenu(name) {
   };
   const tracks = (type, prop) => s['track-list'].filter((t) => t.type === type)
     .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => { if (prop === 'sid') subChosen = true; else audioChosen = true; cmd('set_property', prop, t.id); }); });
-  const styleItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Style…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('style'); return b; };
+  const styleItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Subtitle settings…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('style'); return b; };
   const picItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Picture…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('picture'); return b; };
   m.replaceChildren(...(name === 'fit' ? [...Object.entries(FITS).map(([k, [label, sub]]) => item(label, sub, fit === k, () => setFit(k, true))), picItem()]
     : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => { subChosen = true; cmd('set_property', 'sid', 'no'); }), ...tracks('sub', 'sid'), styleItem()]

@@ -13,7 +13,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 
 /// mpv properties the controls window shows, pushed to it as they change.
 const PROPS: &[&str] = &["pause", "time-pos", "duration", "volume", "mute", "speed", "track-list", "sid", "aid",
-    "media-title", "demuxer-cache-time", "paused-for-cache", "seeking"];
+    "media-title", "demuxer-cache-time", "paused-for-cache", "seeking", "chapter-list", "eof-reached"];
 
 #[derive(Default)]
 struct Player {
@@ -38,9 +38,15 @@ fn player_info(state: State<'_, Player>) -> Value {
 /// Play a URL in mpv drawn inside Marquee's window with player.html floating over it as the controls
 /// (Nuvio: libmpv + WebView2 overlay). Returns (position, duration) in seconds when playback ends.
 #[tauri::command]
-async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: String, start: f64, headers: Vec<String>) -> Result<(f64, f64), String> {
+async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: String, start: f64, headers: Vec<String>, embed: bool) -> Result<(f64, f64), String> {
     let player = app.state::<Player>();
     if player.busy.swap(true, Ordering::SeqCst) { return Err("Something is already playing.".into()); }
+    if !embed { // mpv's own window and controls
+        let a = app.clone();
+        let r = tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, None)).await.map_err(|e| e.to_string()).and_then(|r| r);
+        player.busy.store(false, Ordering::SeqCst);
+        return r;
+    }
     let wid = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let overlay = WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
         .parent(&window).map_err(|e| e.to_string())?
@@ -50,7 +56,7 @@ async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: Str
         Ok(o) => {
             fit(&window, &o);
             let a = app.clone();
-            let r = tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, wid)).await
+            let r = tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, Some(wid))).await
                 .map_err(|e| e.to_string()).and_then(|r| r);
             let _ = o.close();
             r
@@ -63,9 +69,9 @@ async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: Str
     res
 }
 
-fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[String], wid: isize) -> Result<(f64, f64), String> {
+fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[String], wid: Option<isize>) -> Result<(f64, f64), String> {
     let pipe = format!(r"\\.\pipe\marquee-mpv-{}", std::process::id());
-    let mut child = spawn_mpv(&pipe, url, title, start, headers, Some(wid))?;
+    let mut child = spawn_mpv(&pipe, url, title, start, headers, wid)?;
     let player = app.state::<Player>();
     player.props.lock().unwrap().clear();
     let (Some(events), Some(cmd)) = (connect(&pipe, &mut child), connect(&pipe, &mut child)) else {
@@ -85,7 +91,7 @@ fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[Strin
         if let Some(t) = throttle {
             if t.elapsed() < Duration::from_millis(200) { return; }
             *t = Instant::now();
-            raise_mpv(wid);
+            if let Some(w) = wid { raise_mpv(w); }
         }
         let _ = app.emit_to("player", "mpv", json!({ "name": name, "data": v }));
     });
@@ -107,6 +113,31 @@ async fn mpv_cmd(state: State<'_, Player>, args: Vec<Value>) -> Result<Value, St
 #[tauri::command]
 fn mpv_state(state: State<'_, Player>) -> Map<String, Value> {
     state.props.lock().unwrap().clone()
+}
+
+/// Intro/recap/credits times from IntroDB. Done here because IntroDB's CORS only allows its own site.
+#[tauri::command]
+async fn introdb(imdb: String, season: u32, episode: u32) -> Result<Value, String> {
+    if !(imdb.starts_with("tt") && imdb.len() > 2 && imdb[2..].bytes().all(|b| b.is_ascii_digit())) { return Err("bad IMDb id".into()); }
+    let url = format!("https://api.introdb.app/segments?imdb_id={imdb}&season={season}&episode={episode}");
+    let r = reqwest::Client::new().get(url).timeout(Duration::from_secs(8)).send().await.map_err(|e| e.to_string())?;
+    r.json().await.map_err(|e| e.to_string())
+}
+
+/// "Another app" player: hand the link to the .exe the user picked.
+#[tauri::command]
+fn open_external(path: String, url: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) || !p.is_file() {
+        return Err(format!("Marquee can't find {path}. Choose the app again in Settings > Playback."));
+    }
+    Command::new(p).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn pick_exe(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog().file().add_filter("Programs", &["exe"]).blocking_pick_file().map(|f| f.to_string())
 }
 
 #[tauri::command]
@@ -150,12 +181,14 @@ async fn check_update(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 fn spawn_mpv(pipe: &str, url: &str, title: &str, start: f64, headers: &[String], wid: Option<isize>) -> Result<Child, String> {
     let mut cmd = Command::new(mpv_path());
     if let Some(w) = wid {
-        cmd.arg(format!("--wid={w}")); // video becomes a child window of Marquee's window
+        cmd.arg(format!("--wid={w}")) // video becomes a child window of Marquee's window
+            // player.html is the UI; keep-open lets it run the next-episode card after the last frame
+            .args(["--osc=no", "--input-default-bindings=no", "--input-vo-keyboard=no", "--input-cursor=no", "--keep-open=yes"]);
     }
     cmd.arg(format!("--input-ipc-server={pipe}"))
         .arg(format!("--start={start}"))
         .arg(format!("--force-media-title={title}"))
-        .args(["--force-window=immediate", "--osc=no", "--input-default-bindings=no", "--input-vo-keyboard=no", "--input-cursor=no"])
+        .arg("--force-window=immediate")
         .creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no stray console behind the player
     for h in headers {
         cmd.arg(format!("--http-header-fields-append={h}")); // -append takes one item, so commas in values are safe
@@ -259,7 +292,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info])
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe])
         .run(tauri::generate_context!())
         .expect("error while running Marquee");
 }

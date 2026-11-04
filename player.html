@@ -155,6 +155,31 @@
     background: rgba(20,32,42,.8); font-weight: 700; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.on { opacity: 1; }
 
+  /* Skip intro and the next-episode card sit above the controls and stay when they hide */
+  .skip, .upnext { position: fixed; right: 30px; bottom: 150px; transition: bottom .4s cubic-bezier(.2,.8,.2,1); }
+  body.idle .skip, body.idle .upnext { bottom: 40px; }
+  .skip { display: flex; align-items: center; gap: 10px; }
+  .skip[hidden], .upnext[hidden], .still[hidden] { display: none; }
+  .pill { min-height: 48px; padding: 0 22px; border: 1px solid rgba(237,230,216,.5); border-radius: 999px; background: rgba(20,32,42,.82);
+    font-weight: 700; cursor: pointer; }
+  .pill:hover { border-color: var(--paper); background: rgba(20,32,42,.95); }
+  .pill.lit { border-color: var(--lamp); color: var(--lamp); }
+  .skip .note { color: var(--paper); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
+  .upnext { width: min(360px, 80vw); padding: 14px; border-radius: 14px; background: rgba(20,32,42,.94); box-shadow: 0 20px 50px rgba(0,0,0,.5);
+    animation: pop .2s cubic-bezier(.2,.8,.2,1); transform-origin: 100% 100%; }
+  .upnext .thumb { aspect-ratio: 16/9; border-radius: 8px; background: var(--deep) center/cover; margin-bottom: 12px; }
+  .upnext .thumb:not([style*=url]) { display: none; }
+  .upnext b { display: block; color: var(--lamp); font: 700 20px/1 'Big Shoulders Display', sans-serif; }
+  .upnext p { margin: 4px 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .upnext .acts { display: flex; gap: 8px; }
+  /* the lamp warming up: the Play button fills with tungsten as the countdown runs */
+  .warm { position: relative; flex: 1; overflow: hidden; border: 0; color: var(--petrol); background: rgba(237,230,216,.85); }
+  .warm:hover { background: var(--paper); }
+  .warm::before { content: ''; position: absolute; inset: 0; background: var(--lamp); transform: scaleX(var(--p, 0)); transform-origin: left; transition: transform 1s linear; }
+  .warm span { position: relative; }
+  .still { position: fixed; inset: 0; display: grid; place-content: center start; gap: 18px; padding: 0 8vw; background: rgba(20,32,42,.9); }
+  .still h2 { margin: 0; max-width: 18ch; font: 800 clamp(40px, 6vw, 84px)/.92 'Big Shoulders Display', sans-serif; }
+  .still div { display: flex; gap: 10px; }
   @media (max-width: 760px) { .vol input, .sep { display: none; } .clock { font-size: 28px; } footer, header { padding-inline: 16px; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 </style>
@@ -225,12 +250,23 @@
 
 <section id="watching" aria-live="polite"></section>
 
+<div class="skip" id="skip" hidden><span class="note" id="skip-note" role="status"></span><button class="pill" id="skip-btn"></button></div>
+<aside class="upnext" id="upnext" hidden aria-label="Next episode">
+  <div class="thumb" id="up-thumb"></div><b id="up-label"></b><p id="up-title"></p>
+  <div class="acts"><button class="pill warm" id="up-play"><span id="up-count"></span></button><button class="pill" id="up-cancel">Cancel</button></div>
+</aside>
+<section class="still" id="still" hidden role="alertdialog" aria-labelledby="still-q">
+  <h2 id="still-q">Are you still watching?</h2>
+  <div><button class="pill lit" id="still-yes">Continue watching</button><button class="pill" id="still-no">Stop</button></div>
+</section>
+
 <aside class="drawer" id="drawer" hidden aria-labelledby="drawer-title">
   <div class="drawer-head"><h2 id="drawer-title"></h2><button class="ib" id="drawer-close" aria-label="Close panel"><svg><use href="#i-x"/></svg></button></div>
   <div class="drawer-body" id="drawer-body"></div>
 </aside>
 
-<script>
+<script type="module">
+import { segmentAt, nextCardAt, fromChapters } from './playback.js';
 const { invoke } = window.__TAURI__.core;
 const $ = (s) => document.querySelector(s);
 const cmd = (...args) => invoke('mpv_cmd', { args }).catch(() => null);
@@ -272,7 +308,8 @@ function render(k) {
     icon($('#mute'), s.mute || s.volume === 0 ? 'mute' : 'vol');
     $('#mute').setAttribute('aria-label', s.mute ? 'Unmute (M)' : 'Mute (M)');
   }
-  if (k === 'media-title') { $('#title').textContent = s['media-title']; document.title = s['media-title']; }
+  if (k === 'media-title') { $('#title').textContent = s['media-title']; document.title = s['media-title']; newEpisode(); }
+  if (k === 'time-pos' || k === 'eof-reached') timeline();
   if (k === 'paused-for-cache' || k === 'seeking') document.body.classList.toggle('buffering', !!(s['paused-for-cache'] || s.seeking));
   if (k === 'speed') {
     $('[data-menu=speed]').setAttribute('aria-label', `Speed: ${+s.speed.toFixed(2)}×`);
@@ -286,6 +323,67 @@ function render(k) {
     $('[data-menu=audio]').setAttribute('aria-label', aud ? `Audio: ${trackName(aud).main}` : 'Audio');
   }
 }
+
+// Skip intro/recap and the next-episode card, driven by the Playback settings Marquee sends in info.settings
+const opt = () => ({ skip: 'button', nextDelay: 10, stillWatching: 3, ...info.settings });
+let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer; // card: none | shown | done
+function newEpisode() { skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
+const segs = () => (info.segments?.length ? info.segments : fromChapters(s['chapter-list'], s.duration));
+const nextEp = () => info.next && (info.episodes || []).find((e) => e.id === info.next);
+function timeline() {
+  const pos = s['time-pos'] || 0, o = opt();
+  const seg = o.skip === 'off' ? null : segmentAt(segs(), pos);
+  if (seg && o.skip === 'auto' && !skipped.has(seg.start)) {
+    skipped.add(seg.start);
+    cmd('seek', seg.end, 'absolute');
+    clearTimeout(undo?.timer);
+    undo = { seg, timer: setTimeout(() => { undo = null; timeline(); }, 5000) };
+  }
+  const btn = $('#skip-btn');
+  if (undo) { $('#skip-note').textContent = `Skipped ${undo.seg.kind}`; btn.textContent = 'Undo'; }
+  else if (seg) { $('#skip-note').textContent = ''; btn.textContent = `Skip ${seg.kind}`; }
+  $('#skip').hidden = !undo && !(seg && o.skip === 'button');
+  btn.onclick = () => {
+    if (undo) { clearTimeout(undo.timer); cmd('seek', undo.seg.start, 'absolute'); undo = null; } // stays in skipped: no re-skip
+    else if (seg) cmd('seek', seg.end, 'absolute');
+    $('#skip').hidden = true;
+  };
+  const at = nextCardAt(segs(), s.duration);
+  if (card === 'shown' && pos < at - 1) hideCard('none'); // seeked back before the credits
+  if (card === 'none' && nextEp() && o.nextDelay > 0 && at != null && pos >= at) showCard(o.nextDelay);
+  if (s['eof-reached']) { // keep-open: mpv holds the last frame instead of closing
+    if (card === 'shown') playNext(true);
+    else if ($('#still').hidden) quit();
+  }
+}
+function showCard(secs) {
+  const ep = nextEp();
+  card = 'shown'; left = secs;
+  $('#up-thumb').style.backgroundImage = ep.thumbnail ? `url("${encodeURI(ep.thumbnail)}")` : '';
+  $('#up-label').textContent = `Next: Season ${ep.season}, Episode ${ep.number}`;
+  $('#up-title').textContent = ep.title || `Episode ${ep.number}`;
+  const paint = () => { $('#up-count').textContent = `Play in ${left}`; $('#up-play').style.setProperty('--p', 1 - left / secs); };
+  paint();
+  $('#upnext').hidden = false;
+  clearInterval(countTimer);
+  countTimer = setInterval(() => { if (s.pause) return; left--; paint(); if (left <= 0) playNext(true); }, 1000);
+}
+function hideCard(next) { card = next; clearInterval(countTimer); $('#upnext').hidden = true; }
+function playNext(auto) {
+  const o = opt();
+  hideCard('done');
+  if (auto && o.stillWatching && autoRun >= o.stillWatching) { cmd('set_property', 'pause', true); $('#still').hidden = false; $('#still-yes').focus(); return; }
+  autoRun = auto ? autoRun + 1 : 0;
+  ask({ type: 'episode', id: info.next });
+  toast('Loading the next episode');
+}
+$('#up-play').onclick = () => playNext(false);
+$('#up-cancel').onclick = () => hideCard('done');
+$('#still-yes').onclick = () => { $('#still').hidden = true; playNext(false); };
+$('#still-no').onclick = () => quit();
+// any real input means someone is there (capture: runs before the button handlers above)
+addEventListener('pointerdown', () => { autoRun = 0; }, true);
+addEventListener('keydown', () => { autoRun = 0; }, true);
 
 // Picture size: mpv keeps the film's shape (fit), crops to fill the screen, or stretches it
 const FITS = { fit: ['Fit', 'Whole picture, bars if the shapes differ', 'yes', 0], fill: ['Fill', 'Fill the screen, crop the edges', 'yes', 1], stretch: ['Stretch', 'Fill the screen, distort the picture', 'no', 0] };

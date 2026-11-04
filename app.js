@@ -1,4 +1,5 @@
-import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl, pickAutoPlay } from './protocol.js';
+import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
+import { PLAYBACK_DEFAULTS, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
 import { push, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
 
 const DEFAULT_ADDONS = ['https://v3-cinemeta.strem.io/manifest.json']; // catalogs + meta, no keys
@@ -17,6 +18,8 @@ const addonUrls = () => load(pk('installed_addon_urls'), DEFAULT_ADDONS);
 const enabledStates = () => load(pk('addon_enabled_states'), {});
 const library = () => load(pk('library'), []);
 const progress = () => load(pk('watch_progress'), {});
+const settings = () => ({ ...PLAYBACK_DEFAULTS, ...load(pk('settings'), {}) });
+const setSetting = (k, v) => save(pk('settings'), { ...load(pk('settings'), {}), [k]: v });
 
 // ---------- addon fetch ----------
 const manifests = new Map(); // url -> manifest | Error
@@ -261,7 +264,7 @@ async function fetchMeta(type, id) {
   return null;
 }
 
-async function details(type, id) {
+async function details(type, id, pickVid) {
   app.innerHTML = '<section class="hero is-loading"></section>';
   const meta = await fetchMeta(type, id);
   if (!meta) { app.innerHTML = `<section class="page">${state('None of your addons has details for this title. Install one that covers it under Addons.', 'error')}</section>`; return; }
@@ -270,7 +273,7 @@ async function details(type, id) {
   const seasons = [...new Set(eps.map((v) => v.season))];
   const isSeries = type !== 'movie' && eps.length;
   const tid = ytId(meta);
-  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${tid ? '<button class="btn primary" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>' : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
+  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${s}">Season ${s}</button>`).join('')}</div><ol class="ep-list" id="eps"></ol></section>` : ''}
       <section class="streams" id="streams"></section>
@@ -281,6 +284,7 @@ async function details(type, id) {
       : [...library(), { id: meta.id, type, name: meta.name, poster: meta.poster, releaseInfo: meta.releaseInfo }]);
     details(type, id);
   };
+  if ($('#play')) $('#play').onclick = () => streams(meta, type, meta.id, undefined, true);
   if (!isSeries) return void streams(meta, type, meta.id);
   const watched = progress();
   const showSeason = (s) => {
@@ -296,16 +300,18 @@ async function details(type, id) {
     app.querySelectorAll('.ep').forEach((b) => (b.onclick = () => {
       app.querySelectorAll('.ep').forEach((x) => x.removeAttribute('aria-current'));
       b.setAttribute('aria-current', 'true');
-      streams(meta, type, b.dataset.vid, eps.find((e) => e.id === b.dataset.vid));
+      streams(meta, type, b.dataset.vid, eps.find((e) => e.id === b.dataset.vid), true);
     }));
   };
   app.querySelectorAll('.seasons button').forEach((b) => (b.onclick = () => showSeason(+b.dataset.s)));
   const resume = Object.values(watched).filter((p) => p.metaId === meta.id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  showSeason(resume?.season ?? seasons[0]);
+  const picked = eps.find((e) => e.id === pickVid); // "Ask every time" sends the next episode here to choose its stream
+  showSeason(picked?.season ?? resume?.season ?? seasons[0]);
+  if (picked) return void streams(meta, type, picked.id, picked);
   $('#streams').innerHTML = state('Pick an episode to see its streams.');
 }
 
-async function streams(meta, type, videoId, ep) {
+async function streams(meta, type, videoId, ep, autoplay = false) {
   const box = $('#streams');
   const targets = activeAddons().filter((a) => supports(a.manifest, 'stream', type, videoId));
   const epNo = ep && (ep.episode ?? ep.number);
@@ -316,6 +322,9 @@ async function streams(meta, type, videoId, ep) {
   const ctx = { metaId: meta.id, type, name: meta.name, poster: meta.poster, videoId, season: ep?.season, episode: epNo };
   const groups = [];
   shelf = { meta, type, groups }; // the player's Sources/Episodes/Info come from what this page loaded
+  const set = settings(), saved = progress()[videoId];
+  // Reuse: the saved link plays at once; if it no longer works, fall through to the pick below once the lists load
+  const reused = autoplay && set.streamMode === 'reuse' && saved?.stream?.url ? play(ctx, saved.stream, true) : null;
   await Promise.all(targets.map(async (a, i) => { // Nuvio fans out to every addon in parallel, grouped by addon in install order
     const el = $(`#g${i}`);
     try {
@@ -331,15 +340,15 @@ async function streams(meta, type, videoId, ep) {
     } catch (e) { el.innerHTML = state(`${esc(a.manifest.name)} didn't respond (${esc(e.message)}).`, 'error'); }
   }));
   const last = Object.values(progress()).filter((p) => p.metaId === meta.id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const prefs = load('autoplay_prefs', { mode: 'regex', regex: '1080p|WEB-?DL' });
-  const best = pickAutoPlay(groups.filter(Boolean), { ...prefs, bingeGroup: last?.bingeGroup ?? null });
+  const best = chooseStream({ mode: 'auto', quality: set.quality, groups: groups.filter(Boolean), bingeGroup: last?.bingeGroup ?? null });
+  if (autoplay && set.streamMode !== 'ask' && best && !(reused && await reused)) return void play(ctx, best);
   if (best && $('#best-slot')) {
     $('#best-slot').innerHTML = '<button id="best" class="btn primary">Play best match</button>';
     $('#best').onclick = () => play(ctx, best);
   }
 }
 
-function play(ctx, stream) {
+function play(ctx, stream, quiet = false) {
   const t = streamTarget(stream);
   if (!t) return alert('This stream has no link to play.');
   if (t.kind !== 'url') { // shortcut: no torrent engine / external player bridge in a browser; Nuvio uses a native engine + libmpv
@@ -347,7 +356,9 @@ function play(ctx, stream) {
   }
   const key = ctx.videoId;
   const saved = progress()[key];
-  if (window.__TAURI__) return playMpv(ctx, stream, t.href, saved);
+  const how = settings().player;
+  if (tauri && how === 'external') return tauri.core.invoke('open_external', { path: settings().externalPath, url: t.href }).then(() => true, (e) => (alert(e), false));
+  if (tauri) return playMpv(ctx, stream, t.href, saved, how !== 'mpv', quiet);
   const ov = document.createElement('div');
   ov.className = 'player';
   ov.setAttribute('role', 'dialog');
@@ -369,10 +380,11 @@ function play(ctx, stream) {
   ov.querySelector('#copy').onclick = async (e) => { await navigator.clipboard.writeText(t.href); e.target.textContent = 'Link copied'; };
   ov.querySelector('#close').onclick = close;
   ov.querySelector('#close').focus();
+  return true;
 }
 
 function record(ctx, stream, posSec, durSec) {
-  save(pk('watch_progress'), { ...progress(), [ctx.videoId]: { ...ctx, positionMs: posSec * 1000, durationMs: durSec * 1000, bingeGroup: stream.behaviorHints?.bingeGroup ?? null, updatedAt: Date.now() } });
+  save(pk('watch_progress'), { ...progress(), [ctx.videoId]: { ...ctx, positionMs: posSec * 1000, durationMs: durSec * 1000, bingeGroup: stream.behaviorHints?.bingeGroup ?? null, stream, updatedAt: Date.now() } });
 }
 
 // Desktop app (Tauri): mpv plays inside Marquee's window with player.html as the controls, like Nuvio; resume comes back when mpv closes.
@@ -384,16 +396,37 @@ const mediaTitle = (ctx) => ctx.name + (ctx.season ? ` ${epLabel(ctx.season, ctx
 const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
   .sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
 
-async function playMpv(ctx, stream, href, saved) {
-  playing = { ...shelf, ctx, stream };
+async function playMpv(ctx, stream, href, saved, embed, quiet) {
+  playing = { ...shelf, ctx, stream, segments: [] };
   const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
+  let ok = false;
   try {
     await sendPlayerInfo();
-    const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers });
-    if (dur > 0) record(playing.ctx, playing.stream, pos, dur);
-  } catch (e) { alert(e); }
+    loadSegments(ctx);
+    const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers, embed });
+    ok = dur > 0;
+    if (ok) record(playing.ctx, playing.stream, pos, dur);
+  } catch (e) { if (!quiet) alert(e); }
+  const pick = playing.pickEpisode;
   playing = null;
-  route();
+  if (pick) location.hash = `#/meta/${pick.type}/${encodeURIComponent(pick.metaId)}/${encodeURIComponent(pick.videoId)}`;
+  else if (ok || !quiet) route();
+  return ok;
+}
+
+// Intro/recap/credits times for the Skip button and next-episode card: IntroDB for IMDb shows, AniSkip for Kitsu anime ids.
+async function loadSegments(ctx) {
+  const [id, a, b] = ctx.videoId.split(':');
+  let segs = [];
+  try {
+    if (/^tt\d+$/.test(id) && b) segs = fromIntroDB(await tauri.core.invoke('introdb', { imdb: id, season: +a, episode: +b }));
+    else if (id === 'kitsu' && b) {
+      const m = await getJson(`https://kitsu.io/api/edge/anime/${+a}/mappings?filter%5BexternalSite%5D=myanimelist/anime`);
+      const mal = m.data?.[0]?.attributes?.externalId;
+      if (mal) segs = fromAniSkip(await getJson(`https://api.aniskip.com/v2/skip-times/${+mal}/${+b}?types=op&types=ed&types=recap&episodeLength=0`));
+    }
+  } catch { /* no data: the player falls back to chapter names and the last 30 s */ }
+  if (playing?.ctx.videoId === ctx.videoId) { playing.segments = segs; sendPlayerInfo(); }
 }
 
 function sendPlayerInfo() {
@@ -402,7 +435,9 @@ function sendPlayerInfo() {
   const ep = eps.find((v) => v.id === ctx.videoId);
   const at = eps.indexOf(ep);
   const seen = progress();
+  const { player, externalPath, ...set } = settings();
   return tauri.core.invoke('set_player_info', { info: {
+    settings: set, segments: playing.segments, videoId: ctx.videoId,
     name: meta.name, year: meta.releaseInfo ?? meta.year, runtime: meta.runtime, genres: meta.genres ?? meta.genre ?? [],
     rating: meta.imdbRating, description: meta.description, logo: meta.logo, poster: meta.poster,
     episode: ep && { label: epLabel(ep.season, ep.episode ?? ep.number), title: ep.name || ep.title, overview: ep.overview || ep.description },
@@ -430,12 +465,17 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     const ep = seriesEps(meta).find((v) => v.id === r.id);
     if (!ep) return;
     const ctx = { ...playing.ctx, videoId: ep.id, season: ep.season, episode: ep.episode ?? ep.number };
+    const set = settings();
+    if (set.streamMode === 'ask') { // you choose: close the player and open that episode's streams
+      playing.pickEpisode = { type, metaId: meta.id, videoId: ep.id };
+      return tauri.core.invoke('mpv_cmd', { args: ['quit'] });
+    }
     notify(`Finding a stream for ${epLabel(ctx.season, ctx.episode)}`);
     const groups = (await Promise.all(activeAddons().filter((a) => supports(a.manifest, 'stream', type, ep.id))
       .map((a) => getJson(resourceUrl(a.url, 'stream', type, ep.id)).then((j) => ({ addonName: a.manifest.name, streams: j.streams || [] }), () => null))))
       .filter(Boolean);
-    const prefs = load('autoplay_prefs', { mode: 'regex', regex: '1080p|WEB-?DL' });
-    const s = pickAutoPlay(groups, { ...prefs, mode: prefs.mode === 'manual' ? 'first' : prefs.mode, bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null })
+    // shortcut: a reused link that has died isn't detected mid-player (mpv just ends); the details page path does fall back
+    const s = chooseStream({ mode: set.streamMode, quality: set.quality, last: progress()[ep.id], groups, bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null })
       ?? groups.flatMap((g) => g.streams).find((x) => streamTarget(x)?.kind === 'url');
     if (!s) return notify(`No playable stream for ${epLabel(ctx.season, ctx.episode)}. Torrent-only results can't play here.`);
     swap(ctx, s, groups, resumeAt(progress()[ep.id]));
@@ -448,9 +488,10 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     // %bytes%text quoting so commas in the title can't break mpv's option list. shortcut: proxy headers aren't re-sent on a switch; add http-header-fields here if an addon needs them
     const opts = `start=${start},force-media-title=%${new TextEncoder().encode(title).length}%${title}`;
     await tauri.core.invoke('mpv_cmd', { args: ['loadfile', t.href, 'replace', -1, opts] });
-    Object.assign(playing, { ctx, stream: s, groups });
+    Object.assign(playing, { ctx, stream: s, groups, segments: [] });
     notify(`Playing ${title}`);
     sendPlayerInfo();
+    loadSegments(ctx);
   }
 });
 
@@ -522,11 +563,50 @@ function profilesView() {
 }
 
 // ---------- router ----------
+// ---------- settings: one page, per profile, synced (volume stays on this PC inside mpv) ----------
+const PLAYBACK_ROWS = [
+  ['player', 'Play videos in', [['marquee', 'Marquee'], ['mpv', 'mpv window'], ['external', 'Another app']],
+    'Another app opens the link and Marquee can’t track how far you got.'],
+  ['streamMode', 'When you press play', [['reuse', 'Reuse last stream'], ['auto', 'Pick for me'], ['ask', 'Let me choose']],
+    'Reuse plays the link that worked last time for that title, and picks a new one if it has stopped working.'],
+  ['quality', 'Preferred quality', [['2160p', '4K'], ['1080p', '1080p'], ['720p', '720p']],
+    'Used when Marquee picks for you. It stays with the same source as your last episode when it can.'],
+  ['nextDelay', 'Next episode', [[0, 'Off'], [5, '5 s'], [10, '10 s'], [15, '15 s']],
+    'A card counts down as the credits start, then plays the next episode.'],
+  ['stillWatching', 'Ask “Still watching?”', [[0, 'Never'], [3, 'After 3 episodes']],
+    'Pauses autoplay when you haven’t touched anything for a few episodes in a row.'],
+  ['skip', 'Intros and recaps', [['off', 'Leave them'], ['button', 'Show Skip button'], ['auto', 'Skip automatically']],
+    'Uses IntroDB, AniSkip and chapter names in the file. Auto-skip shows an Undo for 5 seconds.'],
+];
+function settingsView() {
+  const set = settings();
+  app.innerHTML = `<section class="page narrow settings"><h1 class="page-title">Settings</h1>
+    <p class="lede">These settings belong to ${esc(profiles().list.find((x) => x.id === pid())?.name ?? 'this profile')} and follow you to every PC you sign in on.</p>
+    <section aria-labelledby="pb"><div class="set-head"><h2 id="pb">Playback</h2><button class="btn quiet" id="reset">Reset to defaults</button></div>
+    ${PLAYBACK_ROWS.map(([k, label, opts, hint]) => `<fieldset class="set-row"><legend>${label}</legend>
+      <div class="pills">${opts.map(([v, t]) => `<label><input type="radio" name="${k}" value="${v}" ${set[k] === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
+      ${k === 'player' && set.player === 'external' ? `<p class="hint">${set.externalPath ? `Opens in ${esc(set.externalPath.split(/[\/]/).pop())}.` : 'No app chosen yet.'} <button class="link" id="exe">${set.externalPath ? 'Change app' : 'Choose app'}</button></p>` : ''}
+      <p class="hint">${hint}</p></fieldset>`).join('')}</section></section>`;
+  app.querySelectorAll('.pills input').forEach((r) => (r.onchange = async () => {
+    const v = typeof PLAYBACK_DEFAULTS[r.name] === 'number' ? +r.value : r.value;
+    setSetting(r.name, v);
+    if (r.name === 'player' && v === 'external' && !set.externalPath) await chooseExe();
+    if (r.name === 'player') settingsView(); // shows or hides the app picker
+  }));
+  if ($('#exe')) $('#exe').onclick = chooseExe;
+  $('#reset').onclick = () => { save(pk('settings'), {}); settingsView(); };
+}
+async function chooseExe() {
+  const path = tauri && await tauri.core.invoke('pick_exe').catch(() => null);
+  if (path) setSetting('externalPath', path);
+  settingsView();
+}
+
 let routeSeq = 0;
 async function route() {
   const seq = ++routeSeq;
   bill = null; closePeek();
-  const [, view, a, b] = location.hash.split('/');
+  const [, view, a, b, c] = location.hash.split('/');
   const me = profiles().list.find((x) => x.id === pid());
   $('#who').innerHTML = me ? `<span class="avatar sm" style="--c:${esc(me.color)}">${esc(me.name[0])}</span>${esc(me.name)}` : '';
   document.querySelectorAll('nav [data-nav]').forEach((l) => l.dataset.nav === (view || '') ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current'));
@@ -538,10 +618,11 @@ async function route() {
   const go = () => {
     scrollTo(0, 0);
     if (view === 'search') return search(decodeURIComponent(a || ''));
-    if (view === 'meta') return details(a, decodeURIComponent(b));
+    if (view === 'meta') return details(a, decodeURIComponent(b), c && decodeURIComponent(c));
     if (view === 'addons') return addonsView();
     if (view === 'library') return libraryView();
     if (view === 'profiles') return profilesView();
+    if (view === 'settings') return settingsView();
     return home();
   };
   // The callback must not return the view's promise: the transition would freeze the screen until the network answers.

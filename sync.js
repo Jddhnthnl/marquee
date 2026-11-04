@@ -2,7 +2,7 @@
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDocsFromServer, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // Web config only names the project; it is public by design.
 const fb = initializeApp({
@@ -34,49 +34,85 @@ export function mergeProfiles(localRaw, remoteRaw) {
   return JSON.stringify(remote.list?.some((p) => p.id === active) ? { ...remote, active } : remote);
 }
 
+// Per-profile keys end in _<profileId>; profile ids never contain '_'.
+export const profileOf = (k) => (/^(profiles|autoplay_prefs)$/.test(k) ? null : k.slice(k.lastIndexOf('_') + 1));
+
+// Drop deleted profiles from a profiles list (never the last one). Returns raw unchanged when nothing goes.
+export function pruneProfiles(raw, dead) {
+  const p = JSON.parse(raw);
+  const list = (p.list || []).filter((x) => !dead.has(x.id));
+  if (!list.length || list.length === p.list.length) return raw;
+  return JSON.stringify({ ...p, list, active: list.some((x) => x.id === p.active) ? p.active : list[0].id });
+}
+
 let uid = null;
 const kv = (k) => doc(db, 'users', uid, 'kv', k);
+// Tombstones: a deleted key becomes { v: null, t } in the cloud, so other PCs delete it too instead of re-uploading it.
+// Deleting wins: once a profile id has a tombstone, its keys and its place in the profiles list never come back.
+// shortcut: tombstones are never purged (a few bytes per deleted key); add a cleanup if profiles get deleted by the thousand.
+const deadLocal = () => JSON.parse(localStorage.getItem('sync_dead') || '{}');
+let dead = new Set(Object.keys(deadLocal()).map(profileOf).filter(Boolean));
 
 function pull(k, v, t) {
-  localStorage.setItem(k, k === 'profiles' ? mergeProfiles(localStorage.getItem(k), v) : v);
+  if (v === null) { localStorage.removeItem(k); dead.add(profileOf(k)); }
+  else if (dead.has(profileOf(k))) return; // a stale copy of a deleted profile's data
+  else if (k === 'profiles') {
+    const merged = mergeProfiles(localStorage.getItem(k), v), pruned = pruneProfiles(merged, dead);
+    localStorage.setItem(k, pruned);
+    if (pruned !== merged) return push(k, pruned); // the cloud list still had a deleted profile: fix it there too
+  } else localStorage.setItem(k, v);
   stamp(k, t);
 }
 
 export function push(k, raw) {
   if (!SYNCED.test(k) || !localStorage.getItem('sync_uid')) return;
+  if (raw !== null && dead.has(profileOf(k))) return localStorage.removeItem(k); // a screen still open on a deleted profile
   const t = Date.now();
   stamp(k, t); // stamped even offline, so the next sync uploads this change instead of overwriting it
   if (!uid) return;
   setDoc(kv(k), { v: raw, t }).catch((e) => console.warn('sync push failed', k, e.code));
 }
 
-// A deleted profile's keys go from this PC and the cloud, so the next sign-in doesn't pull them back.
+// A deleted profile's keys go from this PC and become tombstones in the cloud (uploaded on the next sync if offline now).
 export function drop(k) {
   localStorage.removeItem(k);
-  if (uid && SYNCED.test(k)) deleteDoc(kv(k)).catch((e) => console.warn('sync delete failed', k, e.code));
+  if (!SYNCED.test(k)) return;
+  localStorage.setItem('sync_dead', JSON.stringify({ ...deadLocal(), [k]: Date.now() }));
+  dead.add(profileOf(k));
+  push(k, null);
 }
 
 function forget() {
   syncedKeys().forEach((k) => localStorage.removeItem(k));
   localStorage.removeItem('sync_stamps');
+  localStorage.removeItem('sync_dead');
+  dead = new Set();
 }
 
 // First sync after login. Rejects with code 'permission-denied' when the email is not on the invite list.
 async function start(user) {
   // read first: an account that isn't invited is refused here, before anything on this PC is touched
-  const remote = new Map((await getDocs(collection(db, 'users', user.uid, 'kv'))).docs.map((d) => [d.id, d.data()]));
+  const remote = new Map((await getDocsFromServer(collection(db, 'users', user.uid, 'kv'))).docs.map((d) => [d.id, d.data()]));
   if (localStorage.getItem('sync_uid') !== user.uid) {
     if (localStorage.getItem('sync_uid')) forget(); // another account used this PC: never mix its data into ours
     localStorage.setItem('sync_uid', user.uid);
   }
   uid = user.uid;
-  const local = stamps();
-  for (const k of new Set([...remote.keys(), ...syncedKeys()])) {
+  const local = stamps(), gone = Object.keys(deadLocal());
+  dead = new Set([...gone, ...[...remote].filter(([, r]) => r.v === null).map(([k]) => k)].map(profileOf).filter(Boolean));
+  for (const k of new Set([...remote.keys(), ...syncedKeys(), ...gone])) {
     const r = remote.get(k);
+    if (dead.has(profileOf(k))) { // deleting wins over any copy, older or newer
+      localStorage.removeItem(k);
+      if (r?.v !== null) push(k, null);
+      continue;
+    }
     const what = decide(local[k], r?.t, localStorage.getItem(k) != null);
     if (what === 'pull') pull(k, r.v, r.t);
     if (what === 'push') push(k, localStorage.getItem(k));
   }
+  const p = localStorage.getItem('profiles'), pruned = p && pruneProfiles(p, dead);
+  if (pruned !== p) { localStorage.setItem('profiles', pruned); push('profiles', pruned); }
   // Live changes from the user's other devices show up on the next screen; our own writes echo back with an equal t and are skipped.
   stopListening = onSnapshot(collection(db, 'users', uid, 'kv'), (snap) => {
     snap.docChanges().forEach(({ doc: d }) => {

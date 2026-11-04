@@ -24,4 +24,18 @@ const list = [{ id: '1' }, { id: '2' }];
 assert.equal(JSON.parse(mergeProfiles(JSON.stringify({ active: '2', list }), JSON.stringify({ active: '1', list }))).active, '2', 'keeps this device\'s profile');
 assert.equal(JSON.parse(mergeProfiles(JSON.stringify({ active: '3', list }), JSON.stringify({ active: '1', list }))).active, '1', 'falls back when ours was deleted');
 assert.equal(JSON.parse(mergeProfiles(null, JSON.stringify({ active: '1', list }))).active, '1', 'fresh device');
+
+const profileOf = new Function(`return ${src.match(/export const profileOf = (.*);/)[1]}`)();
+assert.equal(profileOf('library_k3x9'), 'k3x9');
+assert.equal(profileOf('installed_addon_urls_1'), '1', 'underscores in the key name');
+assert.equal(profileOf('profiles'), null);
+assert.equal(profileOf('autoplay_prefs'), null, 'not a per-profile key');
+
+const { pruneProfiles } = new Function(`${pick('pruneProfiles')}\nreturn { pruneProfiles };`)();
+const three = JSON.stringify({ active: '2', list: [{ id: '1' }, { id: '2' }, { id: '3' }] });
+assert.deepEqual(JSON.parse(pruneProfiles(three, new Set(['3']))), { active: '2', list: [{ id: '1' }, { id: '2' }] }, 'stale offline list loses the deleted profile');
+assert.equal(JSON.parse(pruneProfiles(three, new Set(['2']))).active, '1', 'active moves off a deleted profile');
+assert.equal(pruneProfiles(three, new Set(['9'])), three, 'nothing deleted: same text, so no push');
+const one = JSON.stringify({ active: '1', list: [{ id: '1' }] });
+assert.equal(pruneProfiles(one, new Set(['1'])), one, 'never empties the list');
 console.log('sync tests pass');

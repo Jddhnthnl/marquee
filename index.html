@@ -15,13 +15,20 @@
   :root {
     color-scheme: dark;
     --seat: #14202A; --aisle: #1E2D39; --aisle-2: #283A48;
-    --screen: #EDE6D8; --usher: #8FA3B0; --tungsten: #F0B35A; --exit: #E0644F; --bulb-off: #4A3D2A;
+    --screen: #EDE6D8; --usher: #8FA3B0; --tungsten: #F0B35A; --glow: 240 179 90; --exit: #E0644F; --bulb-off: #4A3D2A;
     --display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
     --body: 'Atkinson Hyperlegible', system-ui, sans-serif;
     --gutter: clamp(16px, 4vw, 56px);
     --poster: clamp(124px, 13vw, 172px);
     --ease-out: cubic-bezier(.22, 1, .36, 1); --ease-expo: cubic-bezier(.16, 1, .3, 1); --ease-soft: cubic-bezier(.33, 1, .68, 1);
   }
+  /* per-profile Look (Settings): <html data-accent data-poster data-intro> */
+  html[data-accent=red] { --tungsten: #E8564A; --glow: 232 86 74; }
+  html[data-accent=plum] { --tungsten: #C48FDC; --glow: 196 143 220; }
+  html[data-accent=green] { --tungsten: #5FD38A; --glow: 95 211 138; }
+  html[data-poster=S] { --poster: clamp(104px, 10vw, 136px); }
+  html[data-poster=L] { --poster: clamp(150px, 16vw, 216px); }
+  html[data-intro=off] #intro { display: none; }
   /* ---- depth layers: ambilight behind everything, film grain over the page (under nav + player) ---- */
   #ambient { position: fixed; inset: -12%; z-index: -2; opacity: 0; pointer-events: none; transition: opacity 1.4s ease;
              mask-image: linear-gradient(#000 25%, transparent 85%); }
@@ -50,6 +57,11 @@
   .avatar { --c: var(--aisle-2); display: inline-grid; place-items: center; width: 112px; aspect-ratio: 1; border-radius: 50%;
             background: var(--c); color: var(--screen); font: 800 3.4rem/1 var(--display); }
   .avatar.sm { width: 30px; font-size: 1.05rem; }
+  .avatar.lg { width: 96px; font-size: 2.9rem; }
+  .avatar { overflow: hidden; }
+  .avatar svg { width: 64%; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  .avatar.sm svg { stroke-width: 3.4; width: 76%; }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
 
   /* ---- hero: the one loud thing ---- */
   .hero { position: relative; min-height: min(78vh, 760px); display: flex; align-items: flex-end; isolation: isolate; overflow: hidden;
@@ -87,9 +99,9 @@
   .btn { transition: transform 140ms var(--ease-out), background-color 180ms ease, border-color 180ms ease; }
   .btn:hover { border-color: var(--usher); }
   .btn:active { transform: scale(.96); }
-  .btn.primary { box-shadow: 0 10px 30px -10px rgb(240 179 90 / .55); }
+  .btn.primary { box-shadow: 0 10px 30px -10px rgb(var(--glow) / .55); }
   .btn.primary { background: var(--tungsten); border-color: var(--tungsten); color: #1B1408; }
-  .btn.primary:hover { background: #F6C57A; }
+  .btn.primary:hover { background: color-mix(in srgb, var(--tungsten), #fff 22%); }
   .btn.quiet { min-height: 36px; padding: 0 14px; background: none; font-weight: 400; }
   .btn[aria-pressed="true"] { border-color: var(--tungsten); color: var(--tungsten); }
   .btn:disabled { opacity: .35; cursor: default; }
@@ -213,7 +225,7 @@
   .settings h2 { scroll-margin-top: 96px; }
   /* subtitle preview: a frame from a night scene, lit by a single practical lamp; text sized like mpv (38 px on 720 px) */
   .sub-frame { position: relative; margin: 20px 0 8px; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; container-type: inline-size;
-    background: radial-gradient(60% 80% at 78% 30%, rgb(240 179 90 / .55), transparent 60%),
+    background: radial-gradient(60% 80% at 78% 30%, rgb(var(--glow) / .55), transparent 60%),
       radial-gradient(40% 50% at 20% 85%, rgb(143 163 176 / .35), transparent 70%),
       linear-gradient(160deg, #2B3F4E, #0E171E 70%); }
   .sub-frame::after { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 80px rgb(0 0 0 / .6); pointer-events: none; }
@@ -245,6 +257,30 @@
   .profiles button:hover, .profiles button[aria-current] { color: var(--screen); }
   .profiles button[aria-current] .avatar { box-shadow: 0 0 0 3px var(--seat), 0 0 0 6px var(--tungsten); }
   .avatar.add { background: none; border: 2px dashed var(--aisle-2); color: var(--usher); }
+  /* settings: the profile in use */
+  .me-card { display: flex; align-items: center; gap: 24px; padding: 22px 0 18px; }
+  .name-field { display: grid; gap: 6px; color: var(--usher); font-size: .9rem; }
+  .name-field input { width: min(20rem, 60vw); min-height: 48px; padding: 0 14px; border: 1px solid var(--aisle-2); border-radius: 8px;
+                      background: var(--aisle); color: var(--screen); font: 700 1.7rem/1 var(--display); letter-spacing: .01em; }
+  .name-field input:focus { outline: none; border-color: var(--tungsten); }
+  .pills.dots span { width: 36px; min-height: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--c); }
+  .pills.dots input:checked + span { box-shadow: 0 0 0 3px var(--seat), 0 0 0 5px var(--tungsten); }
+  .pics { display: flex; flex-wrap: wrap; gap: 12px; }
+  .pics label { position: relative; cursor: pointer; }
+  .pics input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .pics .avatar { width: 56px; font-size: 1.7rem; transition: transform 140ms var(--ease-out); }
+  .pics label:hover .avatar { transform: translateY(-2px); }
+  .pics input:checked ~ .avatar { box-shadow: 0 0 0 3px var(--seat), 0 0 0 5px var(--tungsten); }
+  .pics input:focus-visible ~ .avatar { outline: 2px solid var(--screen); outline-offset: 6px; }
+  .set-row .hint .btn { margin-top: 4px; }
+  .btn.danger { border-color: var(--exit); color: var(--exit); }
+  .btn.danger:not(.quiet) { background: var(--exit); color: #1B1408; }
+  .confirm { margin: 0 0 12px; color: var(--screen); font-weight: 700; }
+  .home-rows { list-style: none; margin: 0; padding: 0; max-width: 560px; }
+  .home-rows li { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--aisle); }
+  .home-rows li.off > span { color: var(--usher); opacity: .6; }
+  .home-rows .switch { margin: 0; }
+  .btn.icon { width: 36px; padding: 0; justify-content: center; }
 
   /* ---- player ---- */
   .player { position: fixed; inset: 0; z-index: 9; background: #000; display: flex; flex-direction: column; }
@@ -264,8 +300,8 @@
   .bulbs button::before { content: ''; display: block; width: 11px; aspect-ratio: 1; border-radius: 50%; background: var(--bulb-off);
                           box-shadow: inset 0 -2px 3px rgb(0 0 0 / .45); transition: background-color .3s, box-shadow .3s;
                           animation: chase .8s ease-out calc(var(--j) * 70ms) both; }
-  .bulbs button:hover::before { background: #8A6B3C; }
-  .bulbs button[aria-current]::before { background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(240 179 90 / .9), 0 0 22px 4px rgb(240 179 90 / .35); }
+  .bulbs button:hover::before { background: color-mix(in srgb, var(--tungsten), #000 45%); }
+  .bulbs button[aria-current]::before { background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(var(--glow) / .9), 0 0 22px 4px rgb(var(--glow) / .35); }
   .sound { width: 44px; padding: 0; justify-content: center; }
   .sound[aria-pressed="false"] .wave { opacity: .25; }
   .sound.on-media { position: absolute; right: 10px; bottom: 10px; z-index: 1; width: 36px; min-height: 36px; background: rgb(20 32 42 / .72); border-color: transparent; }
@@ -288,7 +324,7 @@
   .screening { width: min(92vw, 1200px, calc((88vh - 70px) * 16 / 9)); padding: 0; border: 0; background: none; overflow: visible; color: var(--screen); }
   .screening::backdrop { background: rgb(8 12 16 / .86); backdrop-filter: blur(6px); }
   .screening[open] { animation: rise .35s var(--ease-out) both; }
-  .screening .screen { aspect-ratio: 16/9; border-radius: 6px; overflow: hidden; background: #000; box-shadow: 0 0 120px 10px rgb(240 179 90 / .12); }
+  .screening .screen { aspect-ratio: 16/9; border-radius: 6px; overflow: hidden; background: #000; box-shadow: 0 0 120px 10px rgb(var(--glow) / .12); }
   .screening .trailer { display: block; width: 100%; height: 100%; border: 0; }
   .screening form { display: flex; justify-content: flex-end; margin-top: 14px; }
 
@@ -305,10 +341,10 @@
   .sign b { font: 800 clamp(3rem, 8vw, 6rem)/1 var(--display); letter-spacing: .02em; animation: glow .35s ease-out .5s both; }
 
   @keyframes drift { from { scale: 1.08; } to { scale: 1.22; } }
-  @keyframes chase { 30% { background: #F6C57A; box-shadow: 0 0 10px 2px rgb(240 179 90 / .7); } }
+  @keyframes chase { 30% { background: color-mix(in srgb, var(--tungsten), #fff 22%); box-shadow: 0 0 10px 2px rgb(var(--glow) / .7); } }
   @keyframes peek { from { opacity: 0; transform: scale(.55); } }
-  @keyframes lamp { to { background: var(--tungsten); box-shadow: 0 0 8px 2px rgb(240 179 90 / .9), 0 0 30px 6px rgb(240 179 90 / .35); } }
-  @keyframes glow { from { color: #5E6A72; } to { color: var(--tungsten); text-shadow: 0 0 40px rgb(240 179 90 / .45); } }
+  @keyframes lamp { to { background: var(--tungsten); box-shadow: 0 0 8px 2px rgb(var(--glow) / .9), 0 0 30px 6px rgb(var(--glow) / .35); } }
+  @keyframes glow { from { color: #5E6A72; } to { color: var(--tungsten); text-shadow: 0 0 40px rgb(var(--glow) / .45); } }
   @keyframes part-l { to { transform: translateX(-100%); } }
   @keyframes part-r { to { transform: translateX(100%); } }
   @keyframes sign-out { to { opacity: 0; transform: scale(1.12); } }
@@ -320,15 +356,15 @@
   /* sign-in: one lit marquee sign, the form standing in its light */
   body.gated nav { display: none; }
   .gate { min-height: 100vh; box-sizing: border-box; display: grid; place-content: center; justify-items: center; gap: 40px; padding: 48px var(--gutter);
-          background: radial-gradient(55% 42% at 50% 28%, rgb(240 179 90 / .09), transparent 70%); }
+          background: radial-gradient(55% 42% at 50% 28%, rgb(var(--glow) / .09), transparent 70%); }
   .sign-board { position: relative; width: min(440px, 84vw); aspect-ratio: 2.6; display: grid; place-items: center; border-radius: 6px;
-                background: var(--aisle); box-shadow: inset 0 0 0 1px var(--aisle-2), 0 50px 90px -40px rgb(240 179 90 / .4); }
+                background: var(--aisle); box-shadow: inset 0 0 0 1px var(--aisle-2), 0 50px 90px -40px rgb(var(--glow) / .4); }
   .sign-bulbs { position: absolute; inset: 14px; }
   .sign-bulbs i { position: absolute; width: 10px; aspect-ratio: 1; margin: -5px 0 0 -5px; border-radius: 50%;
-                  background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(240 179 90 / .8), 0 0 18px 4px rgb(240 179 90 / .22);
+                  background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(var(--glow) / .8), 0 0 18px 4px rgb(var(--glow) / .22);
                   animation: bulb-on .2s ease-out calc(var(--lead) + var(--i) * 28ms) backwards; }
   .sign-board h1 { margin: 0; font: 800 clamp(3rem, 11vw, 5.4rem)/1 var(--display); letter-spacing: .02em; color: var(--tungsten);
-                   text-shadow: 0 0 40px rgb(240 179 90 / .45); animation: glow .5s ease-out calc(var(--lead) + 1.05s) backwards; }
+                   text-shadow: 0 0 40px rgb(var(--glow) / .45); animation: glow .5s ease-out calc(var(--lead) + 1.05s) backwards; }
   @keyframes bulb-on { from { background: var(--bulb-off); box-shadow: none; } }
   .gate-form { width: min(340px, 84vw); display: grid; gap: 6px; }
   .gate-form label { color: var(--usher); font-size: .9rem; margin-top: 10px; }
@@ -371,6 +407,9 @@
   }
   @media (max-width: 520px) { nav #who { font-size: 0; gap: 0; } .install-row { flex-direction: column; } }
 </style>
+<script>/* the profile's Look before the first paint, so the accent and intro never flash (app.js keeps it current) */
+try { const p = JSON.parse(localStorage.getItem('profiles')), s = JSON.parse(localStorage.getItem('settings_' + (p ? p.active : '1'))) || {}, d = document.documentElement.dataset;
+  d.accent = s.accent || 'tungsten'; d.poster = s.posterSize || 'M'; d.intro = s.intro === false ? 'off' : 'on'; } catch {}</script>
 </head>
 <body>
 <div id="intro" aria-hidden="true"><div class="curtain"></div><div class="curtain"></div>

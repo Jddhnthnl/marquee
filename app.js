@@ -1,6 +1,7 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
-import { push, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
+import { push, drop, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId } from './look.js';
 
 const DEFAULT_ADDONS = ['https://v3-cinemeta.strem.io/manifest.json']; // catalogs + meta, no keys
 const $ = (s) => document.querySelector(s);
@@ -18,7 +19,7 @@ const addonUrls = () => load(pk('installed_addon_urls'), DEFAULT_ADDONS);
 const enabledStates = () => load(pk('addon_enabled_states'), {});
 const library = () => load(pk('library'), []);
 const progress = () => load(pk('watch_progress'), {});
-const settings = () => ({ ...PLAYBACK_DEFAULTS, ...load(pk('settings'), {}) });
+const settings = () => ({ ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS, ...load(pk('settings'), {}) });
 const setSetting = (k, v) => save(pk('settings'), { ...load(pk('settings'), {}), [k]: v });
 
 // ---------- addon fetch ----------
@@ -43,6 +44,19 @@ const RESOURCE_NAMES = { catalog: 'catalogs', meta: 'details', stream: 'streams'
 const epLabel = (s, e) => `S${s} E${e}`;
 const year = (m) => (m.releaseInfo || m.year || '').toString().slice(0, 4);
 const state = (text, cls = '') => `<p class="note ${cls}">${text}</p>`;
+
+// A profile's face: uploaded photo, a drawing from AVATARS, or the first letter of the name.
+const avatar = (p, cls = '', attrs = '') => {
+  const a = p?.avatar ?? '';
+  const face = a.startsWith('data:image/') ? `<img src="${esc(a)}" alt="">`
+    : AVATARS[a] ? `<svg viewBox="0 0 48 48" aria-hidden="true">${AVATARS[a][1]}</svg>` : esc(p?.name?.[0] ?? '');
+  return `<span class="avatar ${cls}" ${attrs} style="--c:${esc(p?.color)}">${face}</span>`;
+};
+// Accent, poster size and the launch intro are attributes on <html>; index.html applies the same ones before the first paint.
+function applyLook(set = settings()) {
+  const d = document.documentElement.dataset;
+  d.accent = set.accent; d.poster = set.posterSize; d.intro = set.intro ? 'on' : 'off';
+}
 
 const art = (src, extra = '') => `<span class="art" data-tilt><img loading="lazy" src="${esc(src)}" alt="">${extra}</span>`;
 const seen = new Map(); // id -> catalog meta, so hover cards need no extra fetch
@@ -128,7 +142,7 @@ function billboard(el, metas) {
 function showBill(b, i) {
   b.i = i; b.t = 0; b.frame = null;
   const m = b.picks[i];
-  b.el.innerHTML = hero(m, { kicker: 'Now showing', actions: `<a class="btn primary" href="#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}">See episodes and streams</a>${ytId(m) ? soundBtn('') : ''}` });
+  b.el.innerHTML = hero(m, { kicker: 'Now showing', actions: `<a class="btn primary" href="#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}">See episodes and streams</a>${ytId(m) && settings().bannerTrailer ? soundBtn('') : ''}` });
   if (b.picks.length > 1) {
     b.el.querySelector('.hero-body').insertAdjacentHTML('beforeend', `<div class="bulbs" role="group" aria-label="Featured titles">${b.picks.map((p, j) =>
       `<button style="--j:${j}" aria-label="${esc(p.name)}" ${j === i ? 'aria-current="true"' : ''} data-j="${j}"></button>`).join('')}</div>`);
@@ -144,7 +158,7 @@ setInterval(() => { // one clock: trailer after 3 s, next title after 30 s (10 s
   if (b.hold || document.hidden || peek || calm.matches) return;
   const m = b.picks[b.i], id = ytId(m), sound = b.el.querySelector('.sound')?.getAttribute('aria-pressed') === 'true';
   b.t++;
-  if (b.t === 3 && id) {
+  if (b.t === 3 && id && settings().bannerTrailer) {
     b.frame = trailer(id, { onEnd: () => nextBill(b), onFail: () => (b.frame = null) });
     b.el.prepend(b.frame);
   }
@@ -184,7 +198,7 @@ function openPeek(a) {
   peek = p;
   if (bill?.frame) ytCmd(bill.frame, 'pauseVideo'); // one trailer at a time
   const id = ytId(m);
-  if (id && !calm.matches) {
+  if (id && !calm.matches && settings().hoverTrailer) {
     let f = null;
     p.querySelector('.peek-media').append(f = trailer(id, { loop: true }));
     p.querySelector('.peek-media').insertAdjacentHTML('beforeend', soundBtn('on-media'));
@@ -195,7 +209,7 @@ app.addEventListener('pointerover', (e) => {
   const a = fine.matches && e.target.closest('.poster');
   if (!a) return;
   clearTimeout(peekT);
-  peekT = setTimeout(() => openPeek(a), 700);
+  peekT = setTimeout(() => openPeek(a), settings().hoverDelay);
 });
 app.addEventListener('pointerout', (e) => { const a = e.target.closest('.poster'); if (a && !a.contains(e.relatedTarget)) clearTimeout(peekT); });
 addEventListener('scroll', closePeek, { passive: true, capture: true }); // fixed card would drift off its poster
@@ -214,20 +228,24 @@ function screening(id, name) {
 }
 
 // ---------- views ----------
+const rowKey = (c) => `${c.manifest.id}/${c.catalog.type}/${c.catalog.id}`;
+const rowTitle = (c) => `${c.catalog.name || c.catalog.id} ${TYPE_NAMES[c.catalog.type] ?? c.catalog.type}`;
 async function home() {
   const cats = homeCatalogs(activeAddons());
   const cw = Object.values(progress()).filter((p) => p.durationMs && p.positionMs / p.durationMs < 0.95)
     .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 20);
+  const rows = { cw: cw.length ? row('Continue watching', '', cw.map((p) => `<a class="poster" href="#/meta/${esc(p.type)}/${encodeURIComponent(p.metaId)}">
+        ${art(p.poster, `<span class="meter"><span style="width:${(p.positionMs / p.durationMs) * 100}%"></span></span>`)}
+        <span class="poster-title">${esc(p.name)}</span>${p.season ? `<span class="poster-year">${epLabel(p.season, p.episode)}</span>` : ''}</a>`).join('')) : '' };
+  cats.forEach((c, i) => (rows[rowKey(c)] = row(rowTitle(c), c.manifest.name, '<div class="skeleton"></div>'.repeat(8), `row${i}`)));
   app.innerHTML = `<section class="hero" id="hero">${cats.length ? '' : hero(
     { name: 'Nothing on the bill yet', description: 'Install an addon to fill your home screen with catalogs.' },
     { actions: '<a class="btn primary" href="#/addons">Install an addon</a>' })}</section>`
-    + (cw.length ? row('Continue watching', '', cw.map((p) => `<a class="poster" href="#/meta/${esc(p.type)}/${encodeURIComponent(p.metaId)}">
-        ${art(p.poster, `<span class="meter"><span style="width:${(p.positionMs / p.durationMs) * 100}%"></span></span>`)}
-        <span class="poster-title">${esc(p.name)}</span>${p.season ? `<span class="poster-year">${epLabel(p.season, p.episode)}</span>` : ''}</a>`).join('')) : '')
-    + cats.map((c, i) => row(`${c.catalog.name || c.catalog.id} ${TYPE_NAMES[c.catalog.type] ?? c.catalog.type}`, c.manifest.name, '<div class="skeleton"></div>'.repeat(8), `row${i}`)).join('');
+    + orderRows(Object.keys(rows), settings().homeRows).filter((r) => r.shown).map((r) => rows[r.key]).join('');
   let heroFilled = !cats.length;
   cats.forEach(async (c, i) => {
     const el = $(`#row${i}`);
+    if (!el) return; // hidden in Settings
     try {
       const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id));
       if (!el) return;
@@ -551,17 +569,16 @@ function profilesView() {
   const p = profiles();
   app.innerHTML = `<section class="page who"><h1 class="marquee">Who’s watching?</h1>
     <ul class="profiles">${p.list.map((x) => `<li><button data-id="${esc(x.id)}" ${x.id === p.active ? 'aria-current="true"' : ''}>
-      <span class="avatar" data-tilt style="--c:${esc(x.color)}">${esc(x.name[0])}</span><span>${esc(x.name)}</span></button></li>`).join('')}
+      ${avatar(x, '', 'data-tilt')}<span>${esc(x.name)}</span></button></li>`).join('')}
       <li><button id="new"><span class="avatar add">+</span><span>Add profile</span></button></li></ul>
-    <p class="hint">Each profile keeps its own addons, library and progress.</p>
+    <p class="hint">Each profile keeps its own addons, library, progress and settings. <a class="link" href="#/settings">Edit ${esc(p.list.find((x) => x.id === p.active)?.name ?? 'profile')}</a></p>
     <p class="hint">Signed in as ${esc(account?.email)}. <button class="link" id="signout">Sign out</button></p></section>`;
   $('#signout').onclick = async () => { await signOutAndForget(); location.hash = '#/'; };
   app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); location.hash = '#/'; }));
   $('#new').onclick = () => {
     const name = prompt('Name for the new profile')?.trim();
     if (!name) return;
-    const id = String(Math.max(...p.list.map((x) => +x.id)) + 1);
-    save('profiles', { ...p, list: [...p.list, { id, name, color: `hsl(${(+id * 67) % 360} 38% 42%)` }] });
+    save('profiles', { ...p, list: [...p.list, { id: newProfileId(), name: name.slice(0, 24), color: PROFILE_COLORS[p.list.length % PROFILE_COLORS.length][0] }] });
     profilesView();
   };
 }
@@ -601,7 +618,8 @@ function settingsView() {
   const set = settings();
   app.innerHTML = `<section class="page narrow settings"><h1 class="page-title">Settings</h1>
     <p class="lede">These settings belong to ${esc(profiles().list.find((x) => x.id === pid())?.name ?? 'this profile')} and follow you to every PC you sign in on.</p>
-    <p class="set-jump"><button class="link" data-jump="pb">Playback</button><button class="link" data-jump="sb">Subtitles</button></p>
+    <p class="set-jump"><button class="link" data-jump="pf">Profile</button><button class="link" data-jump="pb">Playback</button><button class="link" data-jump="sb">Subtitles</button><button class="link" data-jump="lk">Look</button></p>
+    ${profileSection()}
     <section aria-labelledby="pb" data-sec="playback"><div class="set-head"><h2 id="pb">Playback</h2><button class="btn quiet" data-reset="playback">Reset to defaults</button></div>
     ${PLAYBACK_ROWS.map(([k, label, opts, hint]) => setRow(label, pills(k, opts, set[k])
       + (k === 'player' && set.player === 'external' ? `<p class="hint">${set.externalPath ? `Opens in ${esc(set.externalPath.split(/[\\/]/).pop())}.` : 'No app chosen yet.'} <button class="link" id="exe">${set.externalPath ? 'Change app' : 'Choose app'}</button></p>` : ''), hint)).join('')}</section>
@@ -613,11 +631,13 @@ function settingsView() {
     ${setRow('Height', `<div class="slide"><input type="range" name="subLift" min="0" max="30" step="1" value="${set.subLift}" aria-describedby="subLift-v"><output id="subLift-v">${set.subLift ? `${set.subLift}% up` : 'Bottom'}</output></div>`, 'Raise them if they cover burned-in text or your TV crops the edge.')}
     ${setRow('Languages', `<div class="langs"><label>First choice ${langPick('subLang1', set.subLang1)}</label><label>Then ${langPick('subLang2', set.subLang2)}</label></div>`,
       'Marquee turns on the first language the video has. Styled anime subtitles keep their own look and only follow the size.')}
-    </section></section>`;
+    </section>
+    ${lookSection(set)}</section>`;
   const sample = $('.sub-sample');
   paintSample(sample, set);
-  const typed = (name, value) => (typeof PLAYBACK_DEFAULTS[name] === 'number' ? +value : value);
-  app.querySelectorAll('.settings input, .settings select').forEach((r) => {
+  const typed = (name, value) => (typeof { ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS }[name] === 'number' ? +value : value);
+  wireProfile(); wireLook();
+  app.querySelectorAll('[data-sec=playback] input, [data-sec=subtitles] input, [data-sec=subtitles] select, [data-sec=look] .pills input, [data-sec=look] .switch input[name]').forEach((r) => {
     r.oninput = () => { // preview and readouts follow the slider; the profile is saved once you let go
       const live = { ...settings(), [r.name]: typed(r.name, r.value) };
       paintSample(sample, live);
@@ -625,8 +645,9 @@ function settingsView() {
       if (r.name === 'subLift') $('#subLift-v').textContent = live.subLift ? `${live.subLift}% up` : 'Bottom';
     };
     r.onchange = async () => {
-      const v = typed(r.name, r.value);
+      const v = r.type === 'checkbox' ? r.checked : typed(r.name, r.value);
       setSetting(r.name, v);
+      if (r.name in LOOK_DEFAULTS) applyLook();
       if (r.name === 'player' && v === 'external' && !set.externalPath) await chooseExe();
       if (r.name === 'player') settingsView(); // shows or hides the app picker
     };
@@ -634,12 +655,112 @@ function settingsView() {
   if ($('#exe')) $('#exe').onclick = chooseExe;
   app.querySelectorAll('[data-jump]').forEach((b) => (b.onclick = () => document.getElementById(b.dataset.jump).scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth' })));
   app.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = () => { // each section resets only its own keys
-    const isSub = (k) => k.startsWith('sub');
-    const kept = Object.fromEntries(Object.entries(load(pk('settings'), {})).filter(([k]) => (b.dataset.reset === 'subtitles' ? !isSub(k) : isSub(k))));
-    save(pk('settings'), kept);
+    save(pk('settings'), resetSection(load(pk('settings'), {}), b.dataset.reset));
+    applyLook();
     settingsView();
     $(`[data-sec=${b.dataset.reset}] [data-reset]`).focus();
   }));
+}
+// ---------- settings: Profile (the one in use) ----------
+const me = () => profiles().list.find((x) => x.id === pid());
+const editMe = (patch) => { const p = profiles(); save('profiles', { ...p, list: p.list.map((x) => (x.id === p.active ? { ...x, ...patch } : x)) }); };
+function profileSection() {
+  const m = me(), only = profiles().list.length < 2;
+  const photo = m.avatar?.startsWith('data:image/');
+  const pic = (value, label, face) => `<label title="${esc(label)}"><input type="radio" name="avatar" value="${esc(value)}" ${(m.avatar ?? '') === value ? 'checked' : ''}><span class="sr-only">${esc(label)}</span>${face}</label>`;
+  return `<section aria-labelledby="pf" data-sec="profile"><div class="set-head"><h2 id="pf">Profile</h2></div>
+    <div class="me-card">${avatar(m, 'lg')}<label class="name-field"><span>Name</span><input id="pname" value="${esc(m.name)}" maxlength="24" autocomplete="off" spellcheck="false"></label></div>
+    ${setRow('Color', `<div class="pills dots">${PROFILE_COLORS.map(([c, n]) => `<label title="${n}"><input type="radio" name="color" value="${c}" ${m.color === c ? 'checked' : ''}><span style="--c:${c}"><span class="sr-only">${n}</span></span></label>`).join('')}</div>`)}
+    ${setRow('Picture', `<div class="pics">${pic('', 'First letter', avatar({ ...m, avatar: '' }))}${Object.entries(AVATARS).map(([k, [n]]) => pic(k, n, avatar({ ...m, avatar: k }))).join('')}${photo ? pic(m.avatar, 'Your photo', avatar(m)) : ''}</div>
+      <p class="hint"><button class="btn quiet" id="upload">${photo ? 'Change photo' : 'Upload a photo'}</button><input type="file" id="photo" accept="image/*" hidden></p>`,
+      'Photos are cropped to a circle and shrunk to a small file before they sync.')}
+    ${setRow('Delete', `<div id="del-zone"><button class="btn quiet danger" id="pdel" ${only ? 'disabled' : ''}>Delete ${esc(m.name)}</button></div>`,
+      only ? 'Marquee needs at least one profile. Add another on the profile screen first.' : 'Removes this profile’s library, progress, addons and settings from every PC.')}
+  </section>`;
+}
+// Center square, 160 px, JPEG: about 10 KB, small enough to ride along in the synced profile list.
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.width, img.height), c = document.createElement('canvas');
+      c.width = c.height = 160;
+      c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 160, 160);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => reject(new Error('not an image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+function wireProfile() {
+  const sec = $('[data-sec=profile]');
+  const refresh = (focus) => { $('#who').innerHTML = `${avatar(me(), 'sm')}${esc(me().name)}`; settingsView(); if (focus) $(focus)?.focus(); };
+  $('#pname').onchange = (e) => { const name = e.target.value.trim().slice(0, 24); if (name) editMe({ name }); else e.target.value = me().name; refresh('#pname'); };
+  sec.querySelectorAll('[name=color], [name=avatar]').forEach((r) => (r.onchange = () => { editMe({ [r.name]: r.value }); refresh(`[name=${r.name}][value="${CSS.escape(r.value)}"]`); }));
+  $('#upload').onclick = () => $('#photo').click();
+  $('#photo').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { editMe({ avatar: await shrinkPhoto(f) }); refresh('#upload'); }
+    catch { $('#upload').insertAdjacentHTML('afterend', ' <span class="error">That file isn’t a picture Marquee can read. Try a JPEG or PNG.</span>'); }
+  };
+  $('#pdel').onclick = () => {
+    $('#del-zone').innerHTML = `<p class="confirm" role="alert">Delete ${esc(me().name)} and everything in it? This can’t be undone.</p>
+      <button class="btn danger" id="pdel-yes">Delete profile</button> <button class="btn quiet" id="pdel-no">Keep it</button>`;
+    $('#pdel-no').focus();
+    $('#pdel-no').onclick = () => settingsView();
+    $('#pdel-yes').onclick = () => {
+      const p = profiles(), gone = p.active;
+      Object.keys(localStorage).filter((k) => k.endsWith(`_${gone}`)).forEach(drop);
+      save('profiles', removeProfile(p, gone));
+      manifests.clear();
+      location.hash = '#/profiles';
+    };
+  };
+}
+
+// ---------- settings: Look ----------
+const POSTER_SIZES = [['S', 'Small'], ['M', 'Medium'], ['L', 'Large']];
+const DELAYS = [[400, 'Quick'], [700, 'Normal'], [1200, 'Slow']];
+const switchRow = (k, label, on, hint) => setRow(label, `<label class="switch"><input type="checkbox" name="${k}" ${on ? 'checked' : ''}><span>${on ? 'On' : 'Off'}</span></label>`, hint);
+function homeRowList(set) {
+  const titles = { cw: 'Continue watching' };
+  homeCatalogs(activeAddons()).forEach((c) => (titles[rowKey(c)] = `${rowTitle(c)}, from ${c.manifest.name}`));
+  const list = orderRows(Object.keys(titles), set.homeRows);
+  return `<ol class="home-rows">${list.map((r, i) => `<li data-key="${esc(r.key)}" ${r.shown ? '' : 'class="off"'}>
+    <label class="switch"><input type="checkbox" ${r.shown ? 'checked' : ''} aria-label="Show ${esc(titles[r.key])}"></label>
+    <span>${esc(titles[r.key])}</span>
+    <button class="btn quiet icon" data-move="-1" ${i ? '' : 'disabled'} aria-label="Move ${esc(titles[r.key])} up">↑</button>
+    <button class="btn quiet icon" data-move="1" ${i < list.length - 1 ? '' : 'disabled'} aria-label="Move ${esc(titles[r.key])} down">↓</button></li>`).join('')}</ol>`;
+}
+function lookSection(set) {
+  return `<section aria-labelledby="lk" data-sec="look"><div class="set-head"><h2 id="lk">Look</h2><button class="btn quiet" data-reset="look">Reset to defaults</button></div>
+    ${setRow('Accent', `<div class="pills swatches">${Object.entries(ACCENTS).map(([k, [n, c]]) => `<label><input type="radio" name="accent" value="${k}" ${set.accent === k ? 'checked' : ''}><span><i style="background:${c}"></i>${n}</span></label>`).join('')}</div>`,
+      'Buttons, progress bars, the marquee bulbs and this page’s highlights.')}
+    ${setRow('Poster size', pills('posterSize', POSTER_SIZES, set.posterSize))}
+    ${setRow('Home rows', homeRowList(set), 'Turn rows off or move them. Rows from new addons show up at the bottom.')}
+    ${switchRow('bannerTrailer', 'Trailer in the banner', set.bannerTrailer, 'The big banner on Home plays a muted trailer after a few seconds.')}
+    ${switchRow('hoverTrailer', 'Trailer on hover', set.hoverTrailer, 'Resting on a poster opens a preview card that plays a muted trailer.')}
+    ${setRow('Preview card opens', pills('hoverDelay', DELAYS, set.hoverDelay), 'How long you rest on a poster before its card opens.')}
+    ${switchRow('intro', 'Launch intro', set.intro, 'The bulbs and curtain when Marquee opens.')}
+  </section>`;
+}
+function wireLook() {
+  const list = $('.home-rows');
+  const saveRows = () => {
+    const items = [...list.children];
+    setSetting('homeRows', { order: items.map((li) => li.dataset.key), hidden: items.filter((li) => !li.querySelector('input').checked).map((li) => li.dataset.key) });
+  };
+  list.querySelectorAll('input').forEach((c) => (c.onchange = () => { c.closest('li').classList.toggle('off', !c.checked); saveRows(); }));
+  list.querySelectorAll('[data-move]').forEach((b) => (b.onclick = () => {
+    const li = b.closest('li'), to = +b.dataset.move;
+    if (to < 0) li.previousElementSibling.before(li); else li.nextElementSibling.after(li);
+    saveRows();
+    settingsView();
+    $(`.home-rows [data-key="${CSS.escape(li.dataset.key)}"] [data-move="${to}"]:not(:disabled)`)?.focus() ?? $(`.home-rows [data-key="${CSS.escape(li.dataset.key)}"] [data-move]:not(:disabled)`)?.focus();
+  }));
+  $('[data-sec=look]').querySelectorAll('.switch input[name]').forEach((c) => c.addEventListener('change', () => (c.nextElementSibling.textContent = c.checked ? 'On' : 'Off')));
 }
 async function chooseExe() {
   const path = tauri && await tauri.core.invoke('pick_exe').catch(() => null);
@@ -653,7 +774,8 @@ async function route() {
   bill = null; closePeek();
   const [, view, a, b, c] = location.hash.split('/');
   const me = profiles().list.find((x) => x.id === pid());
-  $('#who').innerHTML = me ? `<span class="avatar sm" style="--c:${esc(me.color)}">${esc(me.name[0])}</span>${esc(me.name)}` : '';
+  $('#who').innerHTML = me ? `${avatar(me, 'sm')}${esc(me.name)}` : '';
+  applyLook();
   document.querySelectorAll('nav [data-nav]').forEach((l) => l.dataset.nav === (view || '') ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current'));
   if (view && view !== 'meta') ambient(null);
   // A slow addon manifest (15 s timeout) used to leave the window blank; show placeholders while they load.
@@ -677,7 +799,7 @@ async function route() {
 addEventListener('hashchange', () => account && route());
 
 // ---------- sign-in: the marquee sign lights up bulb by bulb, the form sits in its glow ----------
-let account = null;
+let account = null, launched = false;
 const LOGIN_ERRORS = {
   'auth/invalid-credential': 'That email and password don’t match. Check both and try again.',
   'auth/invalid-email': 'That doesn’t look like an email address.',
@@ -727,13 +849,17 @@ function loginView(code) {
   };
 }
 watch(
-  (user) => { account = user; document.body.classList.remove('gated'); manifests.clear(); route(); },
+  (user) => {
+    account = user; document.body.classList.remove('gated'); manifests.clear();
+    if (!launched && profiles().list.length > 1 && location.hash !== '#/profiles') { launched = true; location.hash = '#/profiles'; } // hashchange routes
+    else { launched = true; route(); }
+  },
   (code) => { account = null; loginView(code); },
 );
 { // launch intro: plays over the loading app, removes itself; any click or key skips it
   const intro = $('#intro');
   const done = () => intro?.remove();
-  if (calm.matches) done();
+  if (calm.matches || !settings().intro) done();
   else {
     intro?.querySelector('.curtain + .curtain').addEventListener('animationend', done);
     intro?.addEventListener('click', done);

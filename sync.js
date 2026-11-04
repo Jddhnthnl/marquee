@@ -2,7 +2,7 @@
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDocs, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // Web config only names the project; it is public by design.
 const fb = initializeApp({
@@ -47,6 +47,12 @@ export function push(k, raw) {
   const t = Date.now();
   stamp(k, t);
   setDoc(kv(k), { v: raw, t }).catch((e) => console.warn('sync push failed', k, e.code));
+}
+
+// A deleted profile's keys go from this PC and the cloud, so the next sign-in doesn't pull them back.
+export function drop(k) {
+  localStorage.removeItem(k);
+  if (uid && SYNCED.test(k)) deleteDoc(kv(k)).catch((e) => console.warn('sync delete failed', k, e.code));
 }
 
 function forget() {

@@ -43,9 +43,10 @@ function pull(k, v, t) {
 }
 
 export function push(k, raw) {
-  if (!uid || !SYNCED.test(k)) return;
+  if (!SYNCED.test(k) || !localStorage.getItem('sync_uid')) return;
   const t = Date.now();
-  stamp(k, t);
+  stamp(k, t); // stamped even offline, so the next sync uploads this change instead of overwriting it
+  if (!uid) return;
   setDoc(kv(k), { v: raw, t }).catch((e) => console.warn('sync push failed', k, e.code));
 }
 
@@ -62,12 +63,13 @@ function forget() {
 
 // First sync after login. Rejects with code 'permission-denied' when the email is not on the invite list.
 async function start(user) {
+  // read first: an account that isn't invited is refused here, before anything on this PC is touched
+  const remote = new Map((await getDocs(collection(db, 'users', user.uid, 'kv'))).docs.map((d) => [d.id, d.data()]));
   if (localStorage.getItem('sync_uid') !== user.uid) {
     if (localStorage.getItem('sync_uid')) forget(); // another account used this PC: never mix its data into ours
     localStorage.setItem('sync_uid', user.uid);
   }
   uid = user.uid;
-  const remote = new Map((await getDocs(collection(db, 'users', uid, 'kv'))).docs.map((d) => [d.id, d.data()]));
   const local = stamps();
   for (const k of new Set([...remote.keys(), ...syncedKeys()])) {
     const r = remote.get(k);
@@ -91,8 +93,23 @@ export function watch(onIn, onOut) {
     stopListening();
     if (!user) { uid = null; return onOut(); }
     try { await start(user); onIn(user); }
-    catch (e) { uid = null; await signOut(auth); onOut(e.code || 'unknown'); }
+    catch (e) {
+      uid = null;
+      // Offline or Firebase down: stay signed in on this PC's copy and sync once it answers. Only refusal (or a new account) signs out.
+      if (keepOffline(e.code, localStorage.getItem('sync_uid') === user.uid)) { onIn(user); retry(user, onOut); }
+      else { await signOut(auth); onOut(e.code || 'unknown'); }
+    }
   });
+}
+export const keepOffline = (code, sameAccount) => sameAccount && code !== 'permission-denied';
+let retryTimer = 0;
+function retry(user, onOut) {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(async () => {
+    if (auth.currentUser?.uid !== user.uid) return; // signed out meanwhile
+    try { await start(user); }
+    catch (e) { if (keepOffline(e.code, true)) retry(user, onOut); else { uid = null; await signOut(auth); onOut(e.code); } }
+  }, 30000);
 }
 
 export const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);

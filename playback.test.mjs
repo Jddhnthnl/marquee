@@ -38,6 +38,7 @@ assert.equal(nextCardAt(segs, 1400), 1300, 'end credits start');
 assert.equal(nextCardAt([], 1400), 1370, 'no data: last 30 s');
 assert.equal(nextCardAt([{ kind: 'outro', start: 200, end: 260 }], 1400), 1370, 'an "outro" in the first half is bad data');
 assert.equal(nextCardAt([], 0), null, 'unknown length: never');
+assert.equal(nextCardAt([], 20), 10, 'short clip without credits data: still not before halfway');
 
 // subtitle style -> mpv properties; every edge choice sets the same keys so switching never leaves a leftover outline or box
 const props = (set) => Object.fromEntries(subProps({ ...PLAYBACK_DEFAULTS, ...set }));

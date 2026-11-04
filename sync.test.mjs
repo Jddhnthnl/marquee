@@ -6,6 +6,12 @@ const src = readFileSync(new URL('./sync.js', import.meta.url), 'utf8');
 const pick = (name) => src.match(new RegExp(`export function ${name}[\\s\\S]*?\\n}`))[0].replace('export ', '');
 const { decide, mergeProfiles } = new Function(`${pick('decide')}\n${pick('mergeProfiles')}\nreturn { decide, mergeProfiles };`)();
 
+const keepOffline = new Function(`return ${src.match(/export const keepOffline = (.*);/)[1]}`)();
+assert.equal(keepOffline('unavailable', true), true, 'offline at launch: stay signed in');
+assert.equal(keepOffline(undefined, true), true, 'unknown network error: stay signed in');
+assert.equal(keepOffline('permission-denied', true), false, 'removed from the invite list: signed out');
+assert.equal(keepOffline('unavailable', false), false, 'another account was never synced here: no data to open');
+
 assert.equal(decide(undefined, 5, false), 'pull', 'new device takes the cloud copy');
 assert.equal(decide(undefined, 5, true), 'pull', 'unstamped local data (pre-sync) loses to the cloud');
 assert.equal(decide(undefined, undefined, true), 'push', 'pre-sync data with nothing in the cloud is uploaded');

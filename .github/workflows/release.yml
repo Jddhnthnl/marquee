@@ -12,6 +12,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    concurrency: release # one tag at a time, so two runs can't race on latest-beta.json
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,4 +41,7 @@ jobs:
         run: |
           gh release download "$GITHUB_REF_NAME" -p latest.json -O latest-beta.json
           gh release view beta >/dev/null 2>&1 || gh release create beta --prerelease --title 'Beta channel' --notes 'Update manifest for the Beta channel. Not an installer.'
-          gh release upload beta latest-beta.json --clobber
+          gh release download beta -p latest-beta.json -O old-beta.json 2>/dev/null || echo '{"version":"0.0.0"}' > old-beta.json
+          # an older tag (rebuilt or pushed late) must never move Beta users backwards
+          if node .github/newer.mjs latest-beta.json old-beta.json; then gh release upload beta latest-beta.json --clobber
+          else echo "Beta already offers a newer version; left as is."; fi

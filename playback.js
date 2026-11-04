@@ -105,7 +105,7 @@ export function nextCardAt(segs, duration, when = 'credits') {
   if (when[0] === 'p' && n) return Math.max(duration / 2, (duration * n) / 100);
   if (when[0] === 'm' && n) return Math.max(duration / 2, duration - n * 60);
   const outro = segs.find((x) => x.kind === 'outro' && x.start > duration / 2);
-  return outro ? outro.start : Math.max(0, duration - 30);
+  return outro ? outro.start : Math.max(duration / 2, duration - 30);
 }
 
 // Chapter names inside the file; a chapter runs until the next one (the last until the end).

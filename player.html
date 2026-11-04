@@ -300,6 +300,8 @@ function trackName(t) {
 }
 
 function render(k) {
+  // another file is starting: forget the last one's end, chapters and length, or its end-of-file would close the player
+  if (k === 'start-file') Object.assign(s, { 'eof-reached': false, 'chapter-list': [], duration: 0, 'time-pos': 0 });
   const dur = s.duration || 0, pos = s['time-pos'] || 0;
   if (k === 'pause') {
     icon($('#pp'), s.pause ? 'play' : 'pause');
@@ -438,7 +440,7 @@ function applyInfo(i) {
   $('#next').hidden = !info.next;
   if (panel) openPanel(panel, true);
 }
-$('#next').onclick = () => { if (info.next) { ask({ type: 'episode', id: info.next }); toast('Loading the next episode'); } };
+$('#next').onclick = () => { if (info.next) playNext(false); }; // also stops a running countdown, so it can't ask twice
 
 function el(tag, props = {}, ...kids) { const e = Object.assign(document.createElement(tag), props); e.append(...kids.filter((k) => k != null && k !== '')); return e; }
 
@@ -447,6 +449,8 @@ function openPanel(name, refresh) {
   closeMenus();
   panel = name;
   const body = $('#drawer-body');
+  const focusable = () => [...body.querySelectorAll('button, input, select')];
+  const had = refresh ? focusable().indexOf(document.activeElement) : -1; // redraws must not throw keyboard focus away
   $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitles', picture: 'Picture', info: info.name || 'Info' }[name];
   if (name === 'episodes') {
     const eps = info.episodes || [];
@@ -464,7 +468,7 @@ function openPanel(name, refresh) {
           e.progress ? el('span', { className: 'meter', style: `width:${Math.min(100, e.progress * 100)}%` }) : null),
         el('span', {}, el('b', { textContent: `Episode ${e.number}` }), el('span', { className: 't', textContent: e.title || `Episode ${e.number}` })));
       if (e.current) b.setAttribute('aria-current', 'true');
-      b.onclick = () => { if (!e.current) { ask({ type: 'episode', id: e.id }); closePanel(); } };
+      b.onclick = () => { if (!e.current) { hideCard('done'); ask({ type: 'episode', id: e.id }); closePanel(); } };
       return b;
     });
     body.replaceChildren(seasons.length > 1 ? tabs : '', ...list);
@@ -485,8 +489,8 @@ function openPanel(name, refresh) {
       info.settings = { ...o, ...info.settings, ...patch };
       // language rules changed: let Marquee pick the track again even if you picked one by hand
       if (Object.keys(patch).some((k) => /^sub(Lang|OnlyMine|Forced)/.test(k))) subChosen = false;
-      applySubs();
-      if (keep) ask({ type: 'settings', patch });
+      if (keep) { applySubs(); ask({ type: 'settings', patch }); }
+      else for (const [k, v] of subProps(opt())) cmd('set_property', k, v); // slider drag: just the look, no track re-pick per tick
     };
     const toggle = (key, label) => {
       const b = el('button', { textContent: label });
@@ -558,6 +562,7 @@ function openPanel(name, refresh) {
   $('#drawer').hidden = false;
   document.querySelectorAll('[data-panel]').forEach((b) => b.classList.toggle('open', b.dataset.panel === name));
   if (!refresh) body.querySelector('[aria-current=true], [aria-selected=true], button')?.focus({ preventScroll: true });
+  else if (had >= 0) focusable()[had]?.focus({ preventScroll: true });
   body.querySelector('[aria-current=true]')?.scrollIntoView({ block: 'center' });
 }
 function closePanel() { panel = null; $('#drawer').hidden = true; document.querySelectorAll('[data-panel]').forEach((b) => b.classList.remove('open')); }
@@ -585,7 +590,7 @@ bar.addEventListener('pointerup', (e) => {
   dragging = false; bar.classList.remove('drag');
   cmd('seek', ratioAt(e) * s.duration, 'absolute');
 });
-
+bar.addEventListener('pointercancel', () => { dragging = false; bar.classList.remove('drag'); }); // else the head stops following playback
 $('#remain').onclick = () => { showTotal = !showTotal; $('#remain').title = showTotal ? 'Show time left' : 'Show total length'; render('time-pos'); };
 const togglePause = () => cmd('cycle', 'pause');
 $('#pp').onclick = togglePause;
@@ -675,6 +680,7 @@ addEventListener('pointermove', (e) => { const xy = `${e.screenX},${e.screenY}`;
 let holdTimer = 0, held = null; // held: the speed to go back to
 addEventListener('keydown', (e) => {
   if (e.target.matches?.('input[type=range]') && e.key.startsWith('Arrow')) return;
+  if (e.target.tagName === 'SELECT' && e.key !== 'Escape') return; // arrows and letters pick a language there
   if (e.key === 'ArrowRight') {
     e.preventDefault(); wake();
     if (!e.repeat && !holdTimer && held == null) holdTimer = setTimeout(() => {
@@ -703,7 +709,7 @@ addEventListener('keyup', (e) => {
   if (held != null) { cmd('set_property', 'speed', held); held = null; toast('Normal speed'); }
   else if (holdTimer) { clearTimeout(holdTimer); holdTimer = 0; cmd('seek', 10); toast('Forward 10 seconds'); }
 });
-addEventListener('blur', () => { if (held != null) { cmd('set_property', 'speed', held); held = null; } clearTimeout(holdTimer); holdTimer = 0; });
+addEventListener('blur', () => { if (held != null) { cmd('set_property', 'speed', held); held = null; toast('Normal speed'); } clearTimeout(holdTimer); holdTimer = 0; });
 
 // State: snapshot first (events before this page loaded are already gone), then live changes
 (async () => {

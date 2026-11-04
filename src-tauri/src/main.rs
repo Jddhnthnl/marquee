@@ -46,11 +46,10 @@ fn player_info(state: State<'_, Player>) -> Value {
 async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: String, start: f64, headers: Vec<String>, embed: bool) -> Result<(f64, f64), String> {
     let player = app.state::<Player>();
     if player.busy.swap(true, Ordering::SeqCst) { return Err("Something is already playing.".into()); }
+    let _busy = Busy(&player.busy); // cleared on every return, including the early `?` ones
     if !embed { // mpv's own window and controls
         let a = app.clone();
-        let r = tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, None)).await.map_err(|e| e.to_string()).and_then(|r| r);
-        player.busy.store(false, Ordering::SeqCst);
-        return r;
+        return tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, None)).await.map_err(|e| e.to_string()).and_then(|r| r);
     }
     let wid = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let overlay = WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
@@ -60,6 +59,11 @@ async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: Str
     let res = match overlay {
         Ok(o) => {
             fit(&window, &o);
+            // controls closed on their own (Alt+F4, crash): mpv has no other way out, so stop it
+            let a = app.clone();
+            o.on_window_event(move |e| if let WindowEvent::Destroyed = e {
+                if let Some(c) = a.state::<Player>().cmd.lock().unwrap().as_mut() { let _ = request(c, &json!(["quit"])); }
+            });
             let a = app.clone();
             let r = tauri::async_runtime::spawn_blocking(move || session(&a, &url, &title, start, &headers, Some(wid))).await
                 .map_err(|e| e.to_string()).and_then(|r| r);
@@ -70,8 +74,12 @@ async fn play_mpv(app: AppHandle, window: WebviewWindow, url: String, title: Str
     };
     let _ = window.set_fullscreen(false);
     let _ = window.set_focus();
-    player.busy.store(false, Ordering::SeqCst);
     res
+}
+
+struct Busy<'a>(&'a AtomicBool);
+impl Drop for Busy<'_> {
+    fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); }
 }
 
 fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[String], wid: Option<isize>) -> Result<(f64, f64), String> {
@@ -90,7 +98,9 @@ fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[Strin
     }
     let (mut last_pos, mut last_cache) = (Instant::now(), Instant::now());
     watch(events, |name, v| {
-        player.props.lock().unwrap().insert(name.into(), v.clone());
+        // next episode or another source: the old file's position must not be saved against the new one
+        if name == "start-file" { player.props.lock().unwrap().clear(); }
+        else { player.props.lock().unwrap().insert(name.into(), v.clone()); }
         // these change every frame; 5 updates a second is plenty for the seek bar
         let throttle = match name { "time-pos" => Some(&mut last_pos), "demuxer-cache-time" => Some(&mut last_cache), _ => None };
         if let Some(t) = throttle {
@@ -136,11 +146,18 @@ fn open_external(path: String, url: String) -> Result<(), String> {
     if !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) || !p.is_file() {
         return Err(format!("Marquee can't find {path}. Choose the app again in Settings > Playback."));
     }
+    // links come from addons: anything else (e.g. "--script=...") would reach the player as an option
+    if !is_web_url(&url) { return Err("Only web links can be sent to another app.".into()); }
     Command::new(p).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn pick_exe(app: AppHandle) -> Option<String> {
+fn is_web_url(u: &str) -> bool {
+    let l = u.to_ascii_lowercase();
+    l.starts_with("http://") || l.starts_with("https://")
+}
+
+#[tauri::command] // async: the blocking file picker must not run on the main thread
+async fn pick_exe(app: AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
     app.dialog().file().add_filter("Programs", &["exe"]).blocking_pick_file().map(|f| f.to_string())
 }
@@ -197,8 +214,8 @@ fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
     app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn discord_set(discord: State<DiscordState>, app_id: String, details: String, status: Option<String>, start: Option<i64>) -> Result<(), String> {
+#[tauri::command] // async: a hung Discord would otherwise freeze the main thread during the handshake
+async fn discord_set(discord: State<'_, DiscordState>, app_id: String, details: String, status: Option<String>, start: Option<i64>) -> Result<(), String> {
     let mut lock = discord.0.lock().map_err(|_| "poisoned")?;
     let needs_new = match lock.as_ref() {
         Some((id, _)) if id == &app_id => false,
@@ -227,7 +244,7 @@ fn discord_set(discord: State<DiscordState>, app_id: String, details: String, st
 }
 
 #[tauri::command]
-fn discord_clear(discord: State<DiscordState>) -> Result<(), String> {
+async fn discord_clear(discord: State<'_, DiscordState>) -> Result<(), String> {
     let mut lock = discord.0.lock().map_err(|_| "poisoned")?;
     if let Some((_, mut client)) = lock.take() {
         let _ = client.clear_activity();
@@ -300,8 +317,10 @@ fn parse_reply(line: &str) -> Option<Result<Value, String>> {
 }
 
 /// (name, value) for a property-change event; unavailable (null) values are dropped so the last real position survives shutdown.
+/// ("start-file", null) when mpv starts another file, so the last file's values can be dropped then instead.
 fn parse_change(line: &str) -> Option<(String, Value)> {
     let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("event")? == "start-file" { return Some(("start-file".into(), Value::Null)); }
     if v.get("event")? != "property-change" { return None; }
     let data = v.get("data").filter(|d| !d.is_null())?.clone();
     Some((v.get("name")?.as_str()?.to_string(), data))
@@ -366,6 +385,14 @@ mod tests {
         assert_eq!(parse_change(r#"{"event":"property-change","id":2,"name":"time-pos","data":3.2}"#), Some(("time-pos".into(), json!(3.2))));
         assert_eq!(parse_change(r#"{"event":"property-change","id":2,"name":"time-pos"}"#), None);
         assert_eq!(parse_change(r#"{"request_id":0,"error":"success"}"#), None);
+        // a new file (next episode, other source) starts: the old file's values must be dropped
+        assert_eq!(parse_change(r#"{"event":"start-file","playlist_entry_id":2}"#), Some(("start-file".into(), Value::Null)));
+    }
+
+    #[test]
+    fn only_web_links_go_to_other_players() {
+        assert!(is_web_url("https://cdn.example/x.mkv") && is_web_url("HTTP://a.b/c"));
+        assert!(!is_web_url("--script=\\\\evil\\x.lua") && !is_web_url("file:///C:/x") && !is_web_url("magnet:?xt=1"));
     }
 
     // Needs mpv on PATH and opens a window for ~4s: cargo test -- --ignored

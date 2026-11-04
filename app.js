@@ -42,7 +42,7 @@ const activeAddons = () => addonUrls()
 // ---------- shared pieces ----------
 const TYPE_NAMES = { movie: 'movies', series: 'series', channel: 'channels', tv: 'TV' };
 const RESOURCE_NAMES = { catalog: 'catalogs', meta: 'details', stream: 'streams', subtitles: 'subtitles', addon_catalog: 'addon lists' };
-const epLabel = (s, e) => `S${s} E${e}`;
+const epLabel = (s, e) => `S${esc(s)} E${esc(e)}`; // numbers come from addons and land in innerHTML
 const year = (m) => (m.releaseInfo || m.year || '').toString().slice(0, 4);
 const state = (text, cls = '') => `<p class="note ${cls}">${text}</p>`;
 
@@ -279,7 +279,7 @@ async function home() {
     try {
       const { metas: all = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id));
       const metas = set.hideUnreleased ? all.filter((m) => !isUnreleased(m)) : all;
-      if (!el) return;
+      if (!el.isConnected) return; // you left Home (or it was redrawn) while this row loaded
       el.innerHTML = metas.slice(0, 30).map(poster).join('') || state('This catalog is empty right now.');
       const picks = heroFilled || (set.heroRows.length && !set.heroRows.includes(rowKey(c))) ? [] : metas.filter((m) => m.background && m.description);
       if (picks.length && $('#hero')) {
@@ -297,11 +297,13 @@ async function search(q) {
     </form><div id="res">${q ? '' : state('Type a title and press Enter.')}</div></section>`;
   $('#sf').onsubmit = (e) => { e.preventDefault(); location.hash = `#/search/${encodeURIComponent(e.target.q.value.trim())}`; };
   if (!q) return;
+  const seq = routeSeq;
   $('#res').innerHTML = row('Searching', '', '<div class="skeleton"></div>'.repeat(6));
   const results = await Promise.all(searchCatalogs(activeAddons()).map(async (c) => {
     const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id, { search: q })).catch(() => ({}));
     return metas.length ? row(TYPE_NAMES[c.catalog.type] ? `Matching ${TYPE_NAMES[c.catalog.type]}` : c.catalog.name, c.manifest.name, metas.map(poster).join('')) : '';
   }));
+  if (seq !== routeSeq) return; // a newer search or page took over while these loaded
   $('#res').innerHTML = results.join('') || state(`Nothing matches “${esc(q)}”. Check the spelling, or install an addon with a bigger catalog.`);
 }
 
@@ -315,7 +317,9 @@ async function fetchMeta(type, id) {
 
 async function details(type, id, pickVid) {
   app.innerHTML = '<section class="hero is-loading"></section>';
+  const seq = routeSeq;
   const meta = await fetchMeta(type, id);
+  if (seq !== routeSeq) return; // a slow addon must not paint this title over the page you went to since
   if (!meta) { app.innerHTML = `<section class="page">${state('None of your addons has details for this title. Install one that covers it under Addons.', 'error')}</section>`; return; }
   const inLib = library().some((m) => m.id === meta.id);
   const eps = (meta.videos || []).filter((v) => v.season !== 0).sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
@@ -326,7 +330,7 @@ async function details(type, id, pickVid) {
   if (set.detailBg === 'color' && meta.poster) tint(meta.poster, meta.id);
   app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
     <div class="detail-body">
-      ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${s}">Season ${s}</button>`).join('')}</div>
+      ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${esc(s)}">Season ${esc(s)}</button>`).join('')}</div>
         <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button></p><ol class="ep-list" id="eps"></ol></section>` : ''}
       <section class="streams" id="streams"></section>
     </div><div id="extras"></div>`;
@@ -337,7 +341,7 @@ async function details(type, id, pickVid) {
   $('#lib').onclick = () => {
     save(pk('library'), inLib ? library().filter((m) => m.id !== meta.id)
       : [...library(), { id: meta.id, type, name: meta.name, poster: meta.poster, releaseInfo: meta.releaseInfo }]);
-    details(type, id);
+    details(type, id, pickVid); // stay on the episode you were looking at
   };
   if ($('#play')) $('#play').onclick = () => streams(meta, type, meta.id, undefined, true);
   if (!isSeries) return void streams(meta, type, meta.id, undefined, auto);
@@ -368,7 +372,7 @@ async function details(type, id, pickVid) {
       const p = watched[v.id];
       return `<li style="--i:${Math.min(i, 10)}"><button class="ep" data-vid="${esc(v.id)}">
         <span class="ep-thumb${set.blurUnwatched && !p ? ' spoil' : ''}">${v.thumbnail ? `<img loading="lazy" src="${esc(v.thumbnail)}" alt="">` : ''}${p ? `<span class="meter"><span style="width:${Math.min(100, (p.positionMs / p.durationMs) * 100)}%"></span></span>` : ''}</span>
-        <span class="ep-num">${v.episode ?? v.number}</span>
+        <span class="ep-num">${esc(v.episode ?? v.number)}</span>
         <span class="ep-text"><span class="ep-title">${esc(v.name || v.title || `Episode ${v.episode ?? v.number}`)}</span>
         ${v.released ? `<span class="ep-date">${esc(fmtDate(v.released))}</span>` : ''}</span></button></li>`;
     }).join('');
@@ -458,6 +462,7 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
     const playable = () => groups.some((g) => g?.streams.some((s) => s.url));
     await Promise.race([all, new Promise((ok) => (set.streamWait ? setTimeout(ok, set.streamWait * 1000) : loads.forEach((p) => p.then(() => playable() && ok()))))]);
   } else await all;
+  if (!box.isConnected) return; // you left this title while the lists loaded: don't start playing it
   const last = Object.values(progress()).filter((p) => p.metaId === meta.id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const best = chooseStream({ mode: 'auto', quality: set.quality, groups: groups.filter(Boolean), bingeGroup: last?.bingeGroup ?? null, ...pickRules(set) });
   if (autoplay && set.streamMode !== 'ask' && best && !(reused && await reused)) return void play(ctx, best);
@@ -529,8 +534,9 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
   const pick = playing.pickEpisode;
   playing = null;
   tauri.core.invoke('discord_clear').catch(() => {});
-  if (pick) location.hash = `#/meta/${pick.type}/${encodeURIComponent(pick.metaId)}/${encodeURIComponent(pick.videoId)}`;
-  else if (ok || !quiet) route();
+  const h = pick && `#/meta/${pick.type}/${encodeURIComponent(pick.metaId)}/${encodeURIComponent(pick.videoId)}`;
+  if (h && location.hash !== h) location.hash = h;
+  else if (h || ok || !quiet) route(); // same hash fires no hashchange, so redraw by hand
   return ok;
 }
 
@@ -579,6 +585,7 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     return sendPlayerInfo();
   }
   const snap = await tauri.core.invoke('mpv_state');
+  if (!playing) return; // the player closed while we asked
   if (snap.duration > 0) record(playing.ctx, playing.stream, snap['time-pos'] ?? 0, snap.duration);
   if (r.type === 'source') {
     const [gi, si] = r.key.split(':').map(Number);
@@ -599,6 +606,7 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     const groups = (await Promise.all(activeAddons().filter((a) => supports(a.manifest, 'stream', type, ep.id))
       .map((a) => getJson(resourceUrl(a.url, 'stream', type, ep.id)).then((j) => ({ addonName: a.manifest.name, streams: j.streams || [] }), () => null))))
       .filter(Boolean);
+    if (!playing) return; // closed while the stream lists loaded
     // shortcut: a reused link that has died isn't detected mid-player (mpv just ends); the details page path does fall back
     const s = chooseStream({ mode: set.streamMode, quality: set.quality, last: progress()[ep.id], groups, bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null, ...pickRules(set) })
       ?? groups.flatMap((g) => g.streams).find((x) => streamTarget(x)?.kind === 'url');
@@ -978,7 +986,7 @@ async function route() {
   document.querySelectorAll('nav [data-nav]').forEach((l) => l.dataset.nav === (view || '') ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current'));
   if (view && view !== 'meta') ambient(null);
   // A slow addon manifest (15 s timeout) used to leave the window blank; show placeholders while they load.
-  if (addonUrls().some((u) => !manifests.has(u))) app.innerHTML = `<section class="hero"></section>${setRow('Loading', '', '<div class="skeleton"></div>'.repeat(8))}`;
+  if (addonUrls().some((u) => !manifests.has(u))) app.innerHTML = `<section class="hero"></section>${row('Loading', '', '<div class="skeleton"></div>'.repeat(8))}`;
   await loadManifests();
   if (seq !== routeSeq) return; // user navigated again while manifests loaded
   const go = () => {

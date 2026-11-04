@@ -41,16 +41,18 @@ const year = (m) => (m.releaseInfo || m.year || '').toString().slice(0, 4);
 const state = (text, cls = '') => `<p class="note ${cls}">${text}</p>`;
 
 const art = (src, extra = '') => `<span class="art" data-tilt><img loading="lazy" src="${esc(src)}" alt="">${extra}</span>`;
-const poster = (m) => `<a class="poster" href="#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}">
+const seen = new Map(); // id -> catalog meta, so hover cards need no extra fetch
+const poster = (m) => (seen.set(m.id, m), `<a class="poster" href="#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}">
   ${art(m.poster)}
-  <span class="poster-title">${esc(m.name)}</span>${year(m) ? `<span class="poster-year">${esc(year(m))}</span>` : ''}</a>`;
+  <span class="poster-title">${esc(m.name)}</span>${year(m) ? `<span class="poster-year">${esc(year(m))}</span>` : ''}</a>`);
 
 const row = (title, source, body, id = '') => `<section class="shelf">
   <header><h2>${esc(title)}</h2>${source ? `<p>from ${esc(source)}</p>` : ''}</header>
   <div class="row"${id ? ` id="${id}"` : ''}>${body}</div></section>`;
 
+const factList = (meta) => [year(meta), meta.runtime, meta.imdbRating && `IMDb ${meta.imdbRating}`, ...(meta.genres || []).slice(0, 3)].filter(Boolean);
 function hero(meta, { kicker = '', actions = '', withPoster = false } = {}) {
-  const facts = [year(meta), meta.runtime, meta.imdbRating && `IMDb ${meta.imdbRating}`, ...(meta.genres || []).slice(0, 3)].filter(Boolean);
+  const facts = factList(meta);
   ambient(meta.background);
   return `${meta.background ? `<img class="hero-bg" src="${esc(meta.background)}" alt="">` : ''}
     <div class="hero-body">
@@ -75,6 +77,138 @@ function ambient(src) {
   img.src = src;
 }
 
+// ---------- trailers: YouTube embeds play on Windows' http://tauri.localhost origin (tauri:// on mac/linux would fail with error 153) ----------
+const ytId = (m) => m?.trailerStreams?.[0]?.ytId ?? m?.trailers?.[0]?.source;
+const SOUND_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M4 9h4l5-4v14l-5-4H4z"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+function trailer(id, { sound = false, loop = false, onPlay, onEnd, onFail } = {}) {
+  const f = document.createElement('iframe');
+  f.className = 'trailer';
+  f.allow = 'autoplay; encrypted-media; fullscreen';
+  if (!sound) { f.tabIndex = -1; f.setAttribute('aria-hidden', 'true'); }
+  f.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&mute=${sound ? 0 : 1}&controls=${sound ? 1 : 0}`
+    + `&playsinline=1&rel=0&iv_load_policy=3&disablekb=${sound ? 0 : 1}&enablejsapi=1${loop ? `&loop=1&playlist=${encodeURIComponent(id)}` : ''}`;
+  f.onload = () => f.contentWindow?.postMessage(JSON.stringify({ event: 'listening', id: 1 }), '*'); // asks the player to post its state changes
+  f._h = { onPlay, onEnd, onFail };
+  return f;
+}
+const ytCmd = (f, func) => f?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*');
+addEventListener('message', (e) => {
+  if (!/^https:\/\/www\.youtube(-nocookie)?\.com$/.test(e.origin)) return;
+  const f = [...document.querySelectorAll('iframe.trailer')].find((x) => x.contentWindow === e.source);
+  let d; try { d = JSON.parse(e.data); } catch { return; }
+  if (!f || !d) return;
+  const st = d.event === 'onStateChange' ? d.info : d.info?.playerState;
+  if (st === 1 && !f.classList.contains('is-playing')) { f.classList.add('is-playing'); f._h.onPlay?.(); } // fade in only once frames flow
+  if (st === 0) f._h.onEnd?.();
+  if (d.event === 'onError') { f.remove(); f._h.onFail?.(); } // 101/150: owner blocks embedding; the backdrop stays
+});
+const soundBtn = (cls) => `<button class="btn quiet sound ${cls}" aria-pressed="false" aria-label="Sound">${SOUND_ICON}</button>`;
+function wireSound(btn, frame) {
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', String(on));
+    ytCmd(frame(), on ? 'unMute' : 'mute');
+  };
+}
+
+// ---------- home billboard: rotates the first catalog's titles; the bulbs are its pager ----------
+let bill = null;
+function billboard(el, metas) {
+  const b = bill = { el, picks: metas.slice(0, 6), i: 0, t: 0, hold: false, frame: null };
+  el.classList.add('billboard');
+  el.onpointerenter = () => (b.hold = true);
+  el.onpointerleave = () => (b.hold = false);
+  showBill(b, 0);
+}
+function showBill(b, i) {
+  b.i = i; b.t = 0; b.frame = null;
+  const m = b.picks[i];
+  b.el.innerHTML = hero(m, { kicker: 'Now showing', actions: `<a class="btn primary" href="#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}">See episodes and streams</a>${ytId(m) ? soundBtn('') : ''}` });
+  if (b.picks.length > 1) {
+    b.el.querySelector('.hero-body').insertAdjacentHTML('beforeend', `<div class="bulbs" role="group" aria-label="Featured titles">${b.picks.map((p, j) =>
+      `<button style="--j:${j}" aria-label="${esc(p.name)}" ${j === i ? 'aria-current="true"' : ''} data-j="${j}"></button>`).join('')}</div>`);
+    b.el.querySelectorAll('.bulbs button').forEach((x) => (x.onclick = () => showBill(b, +x.dataset.j)));
+  }
+  const s = b.el.querySelector('.sound');
+  if (s) wireSound(s, () => b.frame);
+}
+const nextBill = (b) => showBill(b, (b.i + 1) % b.picks.length);
+setInterval(() => { // one clock: trailer after 3 s, next title after 30 s (10 s without a trailer); held while hovered, hidden or peeking
+  const b = bill;
+  if (!b || !b.el.isConnected) return void (bill = null);
+  if (b.hold || document.hidden || peek || calm.matches) return;
+  const m = b.picks[b.i], id = ytId(m), sound = b.el.querySelector('.sound')?.getAttribute('aria-pressed') === 'true';
+  b.t++;
+  if (b.t === 3 && id) {
+    b.frame = trailer(id, { onEnd: () => nextBill(b), onFail: () => (b.frame = null) });
+    b.el.prepend(b.frame);
+  }
+  if (b.picks.length > 1 && !sound && b.t >= (b.frame ? 30 : 10)) nextBill(b); // someone listening keeps their trailer to the end
+}, 1000);
+document.addEventListener('visibilitychange', () => ytCmd(bill?.frame, document.hidden ? 'pauseVideo' : 'playVideo'));
+
+// ---------- hover card: after 0.7 s over a poster, grow into backdrop + facts + muted trailer ----------
+let peek = null, peekT = 0;
+function closePeek() {
+  clearTimeout(peekT);
+  if (!peek) return;
+  peek.remove(); peek = null;
+  if (bill?.frame) ytCmd(bill.frame, 'playVideo');
+}
+function openPeek(a) {
+  const m = seen.get(decodeURIComponent(a.getAttribute('href').split('/').pop()));
+  if (!m || !a.isConnected) return;
+  closePeek();
+  const r = a.querySelector('.art').getBoundingClientRect();
+  const w = Math.max(340, r.width * 2.2);
+  const left = Math.min(Math.max(12, r.left + r.width / 2 - w / 2), innerWidth - w - 12);
+  const p = document.createElement('div');
+  p.className = 'peek';
+  p.setAttribute('aria-hidden', 'true'); // pointer-only preview; the details page carries the same information for keyboard users
+  p.style.cssText = `left:${left}px;width:${w}px;--ox:${r.left + r.width / 2 - left}px`;
+  const facts = factList(m);
+  p.innerHTML = `<span class="peek-media"><img src="${esc(m.background || m.poster)}" alt=""></span>
+    <span class="peek-body"><b class="peek-title">${esc(m.name)}</b>
+      ${facts.length ? `<ul class="facts">${facts.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+      ${m.description ? `<span class="peek-desc">${esc(m.description)}</span>` : ''}</span>`;
+  document.body.append(p);
+  const h = p.offsetHeight; // keep the card centred on the poster, inside the window
+  p.style.top = `${Math.min(Math.max(12, r.top + r.height / 2 - h / 2), innerHeight - h - 12)}px`;
+  p.onclick = () => { location.hash = a.getAttribute('href'); };
+  p.onpointerleave = closePeek;
+  peek = p;
+  if (bill?.frame) ytCmd(bill.frame, 'pauseVideo'); // one trailer at a time
+  const id = ytId(m);
+  if (id && !calm.matches) {
+    let f = null;
+    p.querySelector('.peek-media').append(f = trailer(id, { loop: true }));
+    p.querySelector('.peek-media').insertAdjacentHTML('beforeend', soundBtn('on-media'));
+    wireSound(p.querySelector('.sound'), () => f);
+  }
+}
+app.addEventListener('pointerover', (e) => {
+  const a = fine.matches && e.target.closest('.poster');
+  if (!a) return;
+  clearTimeout(peekT);
+  peekT = setTimeout(() => openPeek(a), 700);
+});
+app.addEventListener('pointerout', (e) => { const a = e.target.closest('.poster'); if (a && !a.contains(e.relatedTarget)) clearTimeout(peekT); });
+addEventListener('scroll', closePeek, { passive: true, capture: true }); // fixed card would drift off its poster
+
+// ---------- trailer with sound: a screening dialog over the page ----------
+function screening(id, name) {
+  const d = document.createElement('dialog');
+  d.className = 'screening';
+  d.setAttribute('aria-label', `Trailer: ${name}`);
+  d.innerHTML = '<div class="screen"></div><form method="dialog"><button class="btn">Close</button></form>';
+  d.querySelector('.screen').append(trailer(id, { sound: true }));
+  d.onclose = () => d.remove(); // removing the iframe stops playback
+  d.onclick = (e) => { if (e.target === d) d.close(); }; // click outside the screen
+  document.body.append(d);
+  d.showModal();
+}
+
 // ---------- views ----------
 async function home() {
   const cats = homeCatalogs(activeAddons());
@@ -94,10 +228,10 @@ async function home() {
       const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id));
       if (!el) return;
       el.innerHTML = metas.slice(0, 30).map(poster).join('') || state('This catalog is empty right now.');
-      const pick = !heroFilled && metas.find((m) => m.background && m.description);
-      if (pick && $('#hero')) {
+      const picks = heroFilled ? [] : metas.filter((m) => m.background && m.description);
+      if (picks.length && $('#hero')) {
         heroFilled = true;
-        $('#hero').innerHTML = hero(pick, { kicker: 'Now showing', actions: `<a class="btn primary" href="#/meta/${esc(pick.type)}/${encodeURIComponent(pick.id)}">See episodes and streams</a>` });
+        billboard($('#hero'), picks);
       }
     } catch (e) { if (el) el.innerHTML = state(`${esc(c.manifest.name)} didn't respond (${esc(e.message)}). Reload to try again.`, 'error'); }
   });
@@ -134,11 +268,13 @@ async function details(type, id) {
   const eps = (meta.videos || []).filter((v) => v.season !== 0).sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
   const seasons = [...new Set(eps.map((v) => v.season))];
   const isSeries = type !== 'movie' && eps.length;
-  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
+  const tid = ytId(meta);
+  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${tid ? '<button class="btn primary" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>' : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${s}">Season ${s}</button>`).join('')}</div><ol class="ep-list" id="eps"></ol></section>` : ''}
       <section class="streams" id="streams"></section>
     </div>`;
+  if (tid) $('#trl').onclick = () => screening(tid, meta.name);
   $('#lib').onclick = () => {
     save(pk('library'), inLib ? library().filter((m) => m.id !== meta.id)
       : [...library(), { id: meta.id, type, name: meta.name, poster: meta.poster, releaseInfo: meta.releaseInfo }]);
@@ -386,6 +522,7 @@ function profilesView() {
 let routeSeq = 0;
 async function route() {
   const seq = ++routeSeq;
+  bill = null; closePeek();
   const [, view, a, b] = location.hash.split('/');
   const me = profiles().list.find((x) => x.id === pid());
   $('#who').innerHTML = me ? `<span class="avatar sm" style="--c:${esc(me.color)}">${esc(me.name[0])}</span>${esc(me.name)}` : '';
@@ -410,6 +547,17 @@ async function route() {
 }
 addEventListener('hashchange', route);
 route();
+{ // launch intro: plays over the loading app, removes itself; any click or key skips it
+  const intro = $('#intro');
+  const done = () => intro?.remove();
+  if (calm.matches) done();
+  else {
+    intro?.querySelector('.curtain + .curtain').addEventListener('animationend', done);
+    intro?.addEventListener('click', done);
+    addEventListener('keydown', done, { once: true });
+    setTimeout(done, 2500); // never let a stalled animation hide the app
+  }
+}
 if (!window.__TAURI__) navigator.serviceWorker?.register('sw.js'); // makes Marquee installable and lets it open without the server
 
 // ---------- depth: pointer tilt on [data-tilt] cards, three-layer parallax on the hero ----------

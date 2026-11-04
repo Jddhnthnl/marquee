@@ -1,5 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
 import { push, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
 
 const DEFAULT_ADDONS = ['https://v3-cinemeta.strem.io/manifest.json']; // catalogs + meta, no keys
@@ -453,6 +453,10 @@ function sendPlayerInfo() {
 tauri?.event.listen('player-request', async ({ payload: r }) => {
   if (!playing) return;
   const notify = (text) => tauri.event.emitTo('player', 'player-notice', text);
+  if (r.type === 'settings') { // Style panel in the player: only subtitle keys, only the types the defaults have
+    for (const [k, v] of Object.entries(r.patch ?? {})) if (k.startsWith('sub') && typeof v === typeof PLAYBACK_DEFAULTS[k]) setSetting(k, v);
+    return sendPlayerInfo();
+  }
   const snap = await tauri.core.invoke('mpv_state');
   if (snap.duration > 0) record(playing.ctx, playing.stream, snap['time-pos'] ?? 0, snap.duration);
   if (r.type === 'source') {
@@ -578,23 +582,64 @@ const PLAYBACK_ROWS = [
   ['skip', 'Intros and recaps', [['off', 'Leave them'], ['button', 'Show Skip button'], ['auto', 'Skip automatically']],
     'Uses IntroDB, AniSkip and chapter names in the file. Auto-skip shows an Undo for 5 seconds.'],
 ];
+const SUB_ROWS = [
+  ['subEdge', 'Edge', [['none', 'None'], ['shadow', 'Shadow'], ['outline', 'Outline'], ['box', 'Box']], 'Box puts a dark band behind each line, the easiest to read on bright scenes.'],
+];
+const pills = (k, opts, cur) => `<div class="pills">${opts.map(([v, t]) => `<label><input type="radio" name="${k}" value="${v}" ${cur === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>`;
+const setRow = (label, control, hint = '') => `<fieldset class="set-row"><legend>${label}</legend>${control}${hint ? `<p class="hint">${hint}</p>` : ''}</fieldset>`;
+const langPick = (k, cur) => `<select name="${k}" class="lang"><option value="">${k === 'subLang1' ? 'Whatever the file picks' : 'None'}</option>${Object.entries(LANGS)
+  .sort((a, b) => a[1].at(-1).localeCompare(b[1].at(-1))).map(([c, n]) => `<option value="${c}" ${cur === c ? 'selected' : ''}>${n.at(-1)}</option>`).join('')}</select>`;
+// The preview uses mpv's own proportions: 38 px text on a 720 px tall picture, scaled with the frame.
+const paintSample = (el, set) => {
+  el.style.setProperty('--scale', set.subSize / 100);
+  el.style.setProperty('--sub', set.subColor);
+  el.style.setProperty('--lift', set.subLift);
+  el.dataset.edge = set.subEdge;
+};
+
 function settingsView() {
   const set = settings();
   app.innerHTML = `<section class="page narrow settings"><h1 class="page-title">Settings</h1>
     <p class="lede">These settings belong to ${esc(profiles().list.find((x) => x.id === pid())?.name ?? 'this profile')} and follow you to every PC you sign in on.</p>
-    <section aria-labelledby="pb"><div class="set-head"><h2 id="pb">Playback</h2><button class="btn quiet" id="reset">Reset to defaults</button></div>
-    ${PLAYBACK_ROWS.map(([k, label, opts, hint]) => `<fieldset class="set-row"><legend>${label}</legend>
-      <div class="pills">${opts.map(([v, t]) => `<label><input type="radio" name="${k}" value="${v}" ${set[k] === v ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div>
-      ${k === 'player' && set.player === 'external' ? `<p class="hint">${set.externalPath ? `Opens in ${esc(set.externalPath.split(/[\/]/).pop())}.` : 'No app chosen yet.'} <button class="link" id="exe">${set.externalPath ? 'Change app' : 'Choose app'}</button></p>` : ''}
-      <p class="hint">${hint}</p></fieldset>`).join('')}</section></section>`;
-  app.querySelectorAll('.pills input').forEach((r) => (r.onchange = async () => {
-    const v = typeof PLAYBACK_DEFAULTS[r.name] === 'number' ? +r.value : r.value;
-    setSetting(r.name, v);
-    if (r.name === 'player' && v === 'external' && !set.externalPath) await chooseExe();
-    if (r.name === 'player') settingsView(); // shows or hides the app picker
-  }));
+    <p class="set-jump"><button class="link" data-jump="pb">Playback</button><button class="link" data-jump="sb">Subtitles</button></p>
+    <section aria-labelledby="pb" data-sec="playback"><div class="set-head"><h2 id="pb">Playback</h2><button class="btn quiet" data-reset="playback">Reset to defaults</button></div>
+    ${PLAYBACK_ROWS.map(([k, label, opts, hint]) => setRow(label, pills(k, opts, set[k])
+      + (k === 'player' && set.player === 'external' ? `<p class="hint">${set.externalPath ? `Opens in ${esc(set.externalPath.split(/[\\/]/).pop())}.` : 'No app chosen yet.'} <button class="link" id="exe">${set.externalPath ? 'Change app' : 'Choose app'}</button></p>` : ''), hint)).join('')}</section>
+    <section aria-labelledby="sb" data-sec="subtitles"><div class="set-head"><h2 id="sb">Subtitles</h2><button class="btn quiet" data-reset="subtitles">Reset to defaults</button></div>
+    <figure class="sub-frame" aria-label="Subtitle preview"><figcaption class="sub-sample"><span>Keep the change. Meet me in the lobby<br>before the second reel starts.</span></figcaption></figure>
+    ${setRow('Size', `<div class="slide"><input type="range" name="subSize" min="50" max="200" step="10" value="${set.subSize}" aria-describedby="subSize-v"><output id="subSize-v">${set.subSize}%</output></div>`)}
+    ${setRow('Color', `<div class="pills swatches">${SUB_COLORS.map(([v, t]) => `<label><input type="radio" name="subColor" value="${v}" ${set.subColor === v ? 'checked' : ''}><span><i style="background:${v}"></i>${t}</span></label>`).join('')}</div>`)}
+    ${SUB_ROWS.map(([k, label, opts, hint]) => setRow(label, pills(k, opts, set[k]), hint)).join('')}
+    ${setRow('Height', `<div class="slide"><input type="range" name="subLift" min="0" max="30" step="1" value="${set.subLift}" aria-describedby="subLift-v"><output id="subLift-v">${set.subLift ? `${set.subLift}% up` : 'Bottom'}</output></div>`, 'Raise them if they cover burned-in text or your TV crops the edge.')}
+    ${setRow('Languages', `<div class="langs"><label>First choice ${langPick('subLang1', set.subLang1)}</label><label>Then ${langPick('subLang2', set.subLang2)}</label></div>`,
+      'Marquee turns on the first language the video has. Styled anime subtitles keep their own look and only follow the size.')}
+    </section></section>`;
+  const sample = $('.sub-sample');
+  paintSample(sample, set);
+  const typed = (name, value) => (typeof PLAYBACK_DEFAULTS[name] === 'number' ? +value : value);
+  app.querySelectorAll('.settings input, .settings select').forEach((r) => {
+    r.oninput = () => { // preview and readouts follow the slider; the profile is saved once you let go
+      const live = { ...settings(), [r.name]: typed(r.name, r.value) };
+      paintSample(sample, live);
+      if (r.name === 'subSize') $('#subSize-v').textContent = `${live.subSize}%`;
+      if (r.name === 'subLift') $('#subLift-v').textContent = live.subLift ? `${live.subLift}% up` : 'Bottom';
+    };
+    r.onchange = async () => {
+      const v = typed(r.name, r.value);
+      setSetting(r.name, v);
+      if (r.name === 'player' && v === 'external' && !set.externalPath) await chooseExe();
+      if (r.name === 'player') settingsView(); // shows or hides the app picker
+    };
+  });
   if ($('#exe')) $('#exe').onclick = chooseExe;
-  $('#reset').onclick = () => { save(pk('settings'), {}); settingsView(); };
+  app.querySelectorAll('[data-jump]').forEach((b) => (b.onclick = () => document.getElementById(b.dataset.jump).scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth' })));
+  app.querySelectorAll('[data-reset]').forEach((b) => (b.onclick = () => { // each section resets only its own keys
+    const isSub = (k) => k.startsWith('sub');
+    const kept = Object.fromEntries(Object.entries(load(pk('settings'), {})).filter(([k]) => (b.dataset.reset === 'subtitles' ? !isSub(k) : isSub(k))));
+    save(pk('settings'), kept);
+    settingsView();
+    $(`[data-sec=${b.dataset.reset}] [data-reset]`).focus();
+  }));
 }
 async function chooseExe() {
   const path = tauri && await tauri.core.invoke('pick_exe').catch(() => null);
@@ -612,7 +657,7 @@ async function route() {
   document.querySelectorAll('nav [data-nav]').forEach((l) => l.dataset.nav === (view || '') ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current'));
   if (view && view !== 'meta') ambient(null);
   // A slow addon manifest (15 s timeout) used to leave the window blank; show placeholders while they load.
-  if (addonUrls().some((u) => !manifests.has(u))) app.innerHTML = `<section class="hero"></section>${row('Loading', '', '<div class="skeleton"></div>'.repeat(8))}`;
+  if (addonUrls().some((u) => !manifests.has(u))) app.innerHTML = `<section class="hero"></section>${setRow('Loading', '', '<div class="skeleton"></div>'.repeat(8))}`;
   await loadManifests();
   if (seq !== routeSeq) return; // user navigated again while manifests loaded
   const go = () => {

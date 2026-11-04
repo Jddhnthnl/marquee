@@ -140,6 +140,14 @@
   .info p { margin: 0 0 16px; line-height: 1.55; max-width: 60ch; }
   .info h4 { margin: 22px 0 6px; font: 800 24px/1.05 'Big Shoulders Display', sans-serif; }
   .empty { padding: 14px 12px; color: var(--dim); }
+  .style-row { padding: 0 0 6px; }
+  .style-row .slide { display: flex; align-items: center; gap: 14px; padding: 0 12px; }
+  .style-row input { flex: 1; accent-color: var(--lamp); }
+  .style-row output { min-width: 6ch; font-variant-numeric: tabular-nums; }
+  .seasons button[aria-pressed=true] { background: var(--paper); color: var(--petrol); font-weight: 700; }
+  .seasons .dot { display: inline-block; width: 11px; height: 11px; margin-right: 7px; border-radius: 50%; vertical-align: -1px; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+  .menu .menu-style { border-top: 1px solid rgba(237,230,216,.12); border-radius: 0 0 7px 7px; margin-top: 4px; color: var(--dim); }
+  .menu .menu-style::before { display: none; }
 
   .wait { position: fixed; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px; border-radius: 50%; display: none;
     border: 3px solid rgba(237,230,216,.18); border-top-color: var(--lamp); animation: spin .9s linear infinite; }
@@ -266,7 +274,7 @@
 </aside>
 
 <script type="module">
-import { segmentAt, nextCardAt, fromChapters } from './playback.js';
+import { PLAYBACK_DEFAULTS, SUB_COLORS, subProps, pickSub, segmentAt, nextCardAt, fromChapters } from './playback.js';
 const { invoke } = window.__TAURI__.core;
 const $ = (s) => document.querySelector(s);
 const cmd = (...args) => invoke('mpv_cmd', { args }).catch(() => null);
@@ -315,6 +323,7 @@ function render(k) {
     $('[data-menu=speed]').setAttribute('aria-label', `Speed: ${+s.speed.toFixed(2)}×`);
     $('[data-menu=speed]').classList.toggle('on', s.speed !== 1);
   }
+  if (k === 'track-list') applySubs();
   if (k === 'track-list' || k === 'sid' || k === 'aid') {
     const cur = (type, prop) => s['track-list'].find((t) => t.type === type && t.id === s[prop]);
     const sub = cur('sub', 'sid'), aud = cur('audio', 'aid');
@@ -325,9 +334,9 @@ function render(k) {
 }
 
 // Skip intro/recap and the next-episode card, driven by the Playback settings Marquee sends in info.settings
-const opt = () => ({ skip: 'button', nextDelay: 10, stillWatching: 3, ...info.settings });
+const opt = () => ({ ...PLAYBACK_DEFAULTS, ...info.settings });
 let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer; // card: none | shown | done
-function newEpisode() { skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
+function newEpisode() { subChosen = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
 const segs = () => (info.segments?.length ? info.segments : fromChapters(s['chapter-list'], s.duration));
 const nextEp = () => info.next && (info.episodes || []).find((e) => e.id === info.next);
 function timeline() {
@@ -398,8 +407,16 @@ function setFit(k, say) {
 // What's playing, from Marquee's main page: details, episodes, sources
 let info = {}, panel = null, epSeason = null;
 const ask = (req) => window.__TAURI__.event.emitTo('main', 'player-request', req);
+let subChosen = false; // you picked a track yourself: stop choosing for you until the next episode
+function applySubs() {
+  for (const [k, v] of subProps(opt())) cmd('set_property', k, v);
+  if (subChosen) return;
+  const o = opt(), id = pickSub(s['track-list'], [o.subLang1, o.subLang2]);
+  if (id != null && s.sid !== id) cmd('set_property', 'sid', id); // re-checked as tracks appear, so a better language that loads late still wins
+}
 function applyInfo(i) {
   info = i || {};
+  applySubs();
   $('#eps-btn').hidden = !info.episodes?.length;
   $('#next').hidden = !info.next;
   if (panel) openPanel(panel, true);
@@ -413,7 +430,7 @@ function openPanel(name, refresh) {
   closeMenus();
   panel = name;
   const body = $('#drawer-body');
-  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', info: info.name || 'Info' }[name];
+  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitle style', info: info.name || 'Info' }[name];
   if (name === 'episodes') {
     const eps = info.episodes || [];
     const seasons = [...new Set(eps.map((e) => e.season))];
@@ -444,6 +461,36 @@ function openPanel(name, refresh) {
       b.onclick = () => { if (!x.current) { ask({ type: 'source', key: x.key }); toast('Switching source'); closePanel(); } };
       return b;
     })]) : [el('p', { className: 'empty', textContent: 'No other sources were loaded for this title.' })]));
+  } else if (name === 'style') {
+    const o = opt();
+    // live on the picture while you change it; saved to the profile (and every PC) on release
+    const change = (patch, keep = true) => {
+      info.settings = { ...o, ...info.settings, ...patch };
+      for (const [k, v] of subProps(opt())) cmd('set_property', k, v);
+      if (keep) ask({ type: 'settings', patch });
+    };
+    const slider = (key, label, min, max, step, show) => {
+      const out = el('output', { textContent: show(o[key]) });
+      const r = el('input', { type: 'range', min, max, step, value: o[key] });
+      r.setAttribute('aria-label', label);
+      r.oninput = () => { out.textContent = show(+r.value); change({ [key]: +r.value }, false); };
+      r.onchange = () => change({ [key]: +r.value });
+      return el('div', { className: 'style-row' }, el('h3', { textContent: label }), el('div', { className: 'slide' }, r, out));
+    };
+    const choice = (key, label, opts) => el('div', { className: 'style-row' }, el('h3', { textContent: label }),
+      el('div', { className: 'seasons' }, ...opts.map(([v, t, dot]) => {
+        const b = el('button', { textContent: t });
+        if (dot) b.prepend(el('i', { className: 'dot', style: `background:${dot}` }));
+        b.setAttribute('aria-pressed', String(o[key] === v));
+        b.onclick = () => { change({ [key]: v }); openPanel('style', true); };
+        return b;
+      })));
+    body.replaceChildren(
+      slider('subSize', 'Size', 50, 200, 10, (v) => `${v}%`),
+      choice('subColor', 'Color', SUB_COLORS.map(([v, t]) => [v, t, v])),
+      choice('subEdge', 'Edge', [['none', 'None'], ['shadow', 'Shadow'], ['outline', 'Outline'], ['box', 'Box']]),
+      slider('subLift', 'Height', 0, 30, 1, (v) => (v ? `${v}% up` : 'Bottom')),
+      el('p', { className: 'empty', textContent: 'Saved to this profile. Languages and the rest are in Settings in Marquee.' }));
   } else {
     const facts = [info.year, info.runtime, (info.genres || []).slice(0, 3).join(', ')].filter(Boolean).join(', ');
     body.replaceChildren(el('div', { className: 'info' },
@@ -508,7 +555,7 @@ function openMenu(name) {
   document.querySelectorAll('.menu').forEach((m) => { m.hidden = m.id !== 'menu-' + name || !m.hidden; });
   document.querySelectorAll('[data-menu]').forEach((b) => b.setAttribute('aria-expanded', String(!$('#menu-' + b.dataset.menu).hidden)));
   const m = $('#menu-' + name);
-  if (m.hidden) return;
+  if (!m || m.hidden) return; // 'none' just closes them all
   const item = (label, sub, on, run) => {
     const b = document.createElement('button');
     b.setAttribute('role', 'menuitemradio'); b.setAttribute('aria-checked', String(on));
@@ -518,9 +565,10 @@ function openMenu(name) {
     return b;
   };
   const tracks = (type, prop) => s['track-list'].filter((t) => t.type === type)
-    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => cmd('set_property', prop, t.id)); });
+    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => { if (prop === 'sid') subChosen = true; cmd('set_property', prop, t.id); }); });
+  const styleItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Style…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('style'); return b; };
   m.replaceChildren(...(name === 'fit' ? Object.entries(FITS).map(([k, [label, sub]]) => item(label, sub, fit === k, () => setFit(k, true)))
-    : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => cmd('set_property', 'sid', 'no')), ...tracks('sub', 'sid')]
+    : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => { subChosen = true; cmd('set_property', 'sid', 'no'); }), ...tracks('sub', 'sid'), styleItem()]
     : name === 'audio' ? tracks('audio', 'aid')
     : [0.5, 0.75, 1, 1.25, 1.5, 2].map((x) => item(`${x}×`, x === 1 ? 'Normal' : '', Math.abs(s.speed - x) < 0.01, () => cmd('set_property', 'speed', x)))));
   m.querySelector('[aria-checked=true]')?.focus();
@@ -577,7 +625,7 @@ addEventListener('keydown', (e) => {
     arrowleft: () => { cmd('seek', -10); toast('Back 10 seconds'); }, j: () => cmd('seek', -10),
     arrowright: () => { cmd('seek', 10); toast('Forward 10 seconds'); }, l: () => cmd('seek', 10),
     arrowup: () => nudgeVolume(5), arrowdown: () => nudgeVolume(-5),
-    m: () => cmd('cycle', 'mute'), f: toggleFull, c: () => cmd('cycle', 'sub'),
+    m: () => cmd('cycle', 'mute'), f: toggleFull, c: () => { subChosen = true; cmd('cycle', 'sub'); },
     a: () => { const ks = Object.keys(FITS); setFit(ks[(ks.indexOf(fit) + 1) % ks.length], true); },
     n: () => $('#next').click(), e: () => info.episodes?.length && openPanel('episodes'), i: () => openPanel('info'),
     escape: () => (panel ? closePanel() : menuOpen() ? closeMenus() : full ? toggleFull() : quit()),

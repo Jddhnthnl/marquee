@@ -1,6 +1,6 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
-import { push, drop, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
+import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite } from './sync.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
   accentFromHex, isUnreleased, needsMeta, continueRows } from './look.js';
 
@@ -820,7 +820,8 @@ const sections = (set) => [
       'Shows what you’re watching on your Discord profile. Needs the Discord app running and an application ID from discord.com/developers.')
     + setRow('New episode alerts', `${sw('alerts', set.alerts)}<button class="btn quiet" id="alert-test">Send a test</button>`,
       'While Marquee is open it checks the series in your library every 3 hours and tells you when a new episode is out.')
-    + setRow('Sort library by', pills('librarySort', [['added', 'Recently added'], ['title', 'Title'], ['released', 'Release year']], set.librarySort))),
+    + setRow('Sort library by', pills('librarySort', [['added', 'Recently added'], ['title', 'Title'], ['released', 'Release year']], set.librarySort))
+    + '<div id="invites"></div>'), // filled in for the admin only
 ];
 
 let spy = null;
@@ -835,7 +836,7 @@ function settingsView() {
   const typed = (name, value) => (typeof { ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS }[name] === 'number' ? +value : value);
   const value = (r) => (r.closest('[data-multi]') ? [...r.closest('[data-multi]').querySelectorAll('input:checked')].map((i) => i.value)
     : r.type === 'checkbox' ? r.checked : typed(r.name, r.value));
-  wireProfile(); wireLists();
+  wireProfile(); wireLists(); wireInvites();
   app.querySelectorAll('[data-sec]:not([data-sec=profile]) :is(input, select)[name]').forEach((r) => {
     r.oninput = () => { // preview and readouts follow the slider; the profile is saved once you let go
       if (FMT[r.name]) $(`#${r.name}-v`).textContent = FMT[r.name](+r.value);
@@ -968,6 +969,44 @@ function wireLists() {
     }));
   });
 }
+// Admin only: who may make an account. The rules refuse everyone else, so for them the box just stays empty.
+async function wireInvites() {
+  const box = $('#invites');
+  if (!box || !(await isAdmin())) return;
+  const draw = async (msg = '', ok = true) => {
+    let list;
+    try { list = await invites(); } catch { list = null; }
+    if (!box.isConnected) return;
+    const me = account?.email?.toLowerCase();
+    box.innerHTML = setRow('Invites', (list ? `<ul class="home-rows invites">${list.map((e) => `<li data-email="${esc(e)}"><span>${esc(e)}</span>
+      ${e === me ? '<span class="hint">You</span>' : `<button class="btn quiet danger" data-uninvite aria-label="Remove ${esc(e)}">Remove</button>`}</li>`).join('')}</ul>`
+      : '<p class="error">Couldn’t load the invite list. Check your internet connection.</p>')
+      + `<form class="invite-add" id="invite-add" novalidate><input class="lang text" id="invite-em" type="email" placeholder="friend@example.com" aria-label="Email to invite" autocomplete="off" spellcheck="false">
+        <button class="btn">Invite</button></form><p class="hint${ok ? '' : ' error'}" id="invite-msg" role="status">${esc(msg)}</p>`,
+      'Invited friends make their own account from the sign-in screen and confirm their email. Removing someone signs them out; their data stays in case you invite them again.');
+    $('#invite-add').onsubmit = async (e) => {
+      e.preventDefault();
+      const email = $('#invite-em').value.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return draw('That doesn’t look like an email address.', false).then(() => $('#invite-em').focus());
+      if (list?.includes(email)) return draw(`${email} is already invited.`, false);
+      try { await invite(email); await draw(`Invited ${email}. Tell them to choose “Create an account” on the sign-in screen.`); }
+      catch { await draw('That invite didn’t go through. Check your internet connection and try again.', false); }
+      $('#invite-em')?.focus();
+    };
+    box.querySelectorAll('[data-uninvite]').forEach((b) => (b.onclick = () => {
+      const li = b.closest('li'), email = li.dataset.email;
+      li.innerHTML = `<span class="confirm" role="alert">Remove ${esc(email)}? They’ll be signed out.</span>
+        <span><button class="btn danger" data-yes>Remove</button> <button class="btn quiet" data-no>Keep</button></span>`;
+      li.querySelector('[data-no]').focus();
+      li.querySelector('[data-no]').onclick = () => draw();
+      li.querySelector('[data-yes]').onclick = async () => {
+        try { await uninvite(email); await draw(`Removed ${email}.`); } catch { await draw('Couldn’t remove that invite. Try again.', false); }
+        $('#invite-em')?.focus();
+      };
+    }));
+  };
+  draw();
+}
 async function chooseExe() {
   const path = tauri && await tauri.core.invoke('pick_exe').catch(() => null);
   if (path) setSetting('externalPath', path);
@@ -1015,6 +1054,11 @@ const LOGIN_ERRORS = {
   'auth/network-request-failed': 'Can’t reach the sign-in service. Check your internet connection.',
   'auth/user-disabled': 'This account is turned off. Ask whoever set up Marquee.',
   'permission-denied': 'This account isn’t on the invite list yet. Ask whoever set up Marquee to add your email.',
+  'not-invited': 'That email isn’t on the invite list. Ask whoever set up Marquee to add it, then try again.',
+  'unverified': 'Almost there. We sent a link to your email: open it to confirm, then sign in here. Check spam too.',
+  'auth/email-already-in-use': 'That email already has an account. Sign in instead, or use Forgot password.',
+  'auth/weak-password': 'Use at least 6 characters for your password.',
+  'mismatch': 'The two passwords don’t match.',
 };
 const loginError = (code) => LOGIN_ERRORS[code] || `Sign-in didn’t work (${code}). Try again.`;
 function signBulbs(across = 15, down = 5) { // clockwise from the top-left corner, so the lighting runs around the frame
@@ -1025,30 +1069,35 @@ function signBulbs(across = 15, down = 5) { // clockwise from the top-left corne
   for (let j = 1; j < down; j++) pts.push([0, 1 - j / down]);
   return pts.map(([x, y], i) => `<i style="left:${x * 100}%;top:${y * 100}%;--i:${i}"></i>`).join('');
 }
-function loginView(code) {
+function loginView(code, create = false) {
   document.body.classList.add('gated');
+  const label = create ? 'Create account' : 'Sign in';
   // When the launch curtain is still up, wait for it to part before the bulbs come on.
   app.innerHTML = `<section class="gate" style="--lead:${$('#intro') ? 1300 : 0}ms">
     <div class="sign-board"><span class="sign-bulbs" aria-hidden="true">${signBulbs()}</span><h1>Marquee</h1></div>
     <form class="gate-form" id="login" novalidate>
       <label for="em">Email</label><input id="em" type="email" autocomplete="username">
-      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="${create ? 'new-password' : 'current-password'}">
+      ${create ? '<label for="pw2">Password again</label><input id="pw2" type="password" autocomplete="new-password">' : ''}
       <p class="gate-msg" id="msg" role="alert"></p>
-      <button class="btn primary">Sign in</button>
-      <button type="button" class="link" id="forgot">Forgot password?</button>
+      <button class="btn primary">${label}</button>
+      ${create ? '' : '<button type="button" class="link" id="forgot">Forgot password?</button>'}
     </form>
-    <p class="hint">Marquee is invite-only. Ask whoever set it up to add your email.</p></section>`;
+    <p class="hint">${create ? 'Only invited emails can make an account.' : 'Marquee is invite-only.'}
+      <button type="button" class="link" id="mode">${create ? 'I have an account' : 'Invited? Create an account'}</button></p></section>`;
   const say = (text, ok = false) => { $('#msg').textContent = text; $('#msg').classList.toggle('ok', ok); };
-  if (code) say(loginError(code));
+  if (code) say(loginError(code), code === 'unverified');
   $('#em').focus();
+  $('#mode').onclick = () => loginView(null, !create);
   $('#login').onsubmit = async (e) => {
     e.preventDefault();
+    if (create && $('#pw').value !== $('#pw2').value) { $('#pw2').focus(); return say(loginError('mismatch')); }
     const btn = e.target.querySelector('.primary');
-    btn.disabled = true; btn.textContent = 'Signing in…'; say('');
-    try { await signIn($('#em').value.trim(), $('#pw').value); } // watch() below takes over on success
-    catch (err) { say(loginError(err.code)); btn.disabled = false; btn.textContent = 'Sign in'; }
+    btn.disabled = true; btn.textContent = create ? 'Creating…' : 'Signing in…'; say('');
+    try { await (create ? signUp : signIn)($('#em').value.trim(), $('#pw').value); } // watch() below takes over on success
+    catch (err) { say(loginError(err.code)); btn.disabled = false; btn.textContent = label; }
   };
-  $('#forgot').onclick = async () => {
+  if (!create) $('#forgot').onclick = async () => {
     const email = $('#em').value.trim();
     if (!email) { $('#em').focus(); return say('Enter your email above, then choose Forgot password again.'); }
     try { await resetPassword(email); say(`If ${email} has an account, a reset link is on its way. Check spam too.`, true); }

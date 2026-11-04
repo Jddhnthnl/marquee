@@ -1,8 +1,8 @@
 // Login + cloud sync. Each synced localStorage key is one Firestore doc users/<uid>/kv/<key> = { v: JSON text, t: ms };
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDocsFromServer, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
+import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // Web config only names the project; it is public by design.
 const fb = initializeApp({
@@ -128,6 +128,7 @@ export function watch(onIn, onOut) {
   onAuthStateChanged(auth, async (user) => {
     stopListening();
     if (!user) { uid = null; return onOut(); }
+    if (!user.emailVerified) return onOut(await gate(user));
     try { await start(user); onIn(user); }
     catch (e) {
       uid = null;
@@ -136,6 +137,16 @@ export function watch(onIn, onOut) {
       else { await signOut(auth); onOut(e.code || 'unknown'); }
     }
   });
+}
+// Sign-up is open to anyone, so an unverified account is checked here and never synced.
+// Not invited: the account is deleted again. Invited: a confirmation link is (re)sent and it waits signed out.
+async function gate(user) {
+  const email = user.email.toLowerCase();
+  const invited = await getDoc(doc(db, 'allowlist', email)).then((d) => d.exists(), () => null);
+  if (invited === false) { await user.delete().catch(() => signOut(auth)); return 'not-invited'; }
+  if (invited) await sendEmailVerification(user).catch(() => {}); // too-many-requests: the earlier link still works
+  await signOut(auth);
+  return invited ? 'unverified' : 'auth/network-request-failed';
 }
 export const keepOffline = (code, sameAccount) => sameAccount && code !== 'permission-denied';
 let retryTimer = 0;
@@ -149,9 +160,16 @@ function retry(user, onOut) {
 }
 
 export const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);
+export const signUp = (email, password) => createUserWithEmailAndPassword(auth, email, password); // watch() gates it
 export const resetPassword = (email) => sendPasswordResetEmail(auth, email);
 export async function signOutAndForget() {
   await signOut(auth);
   forget();
   localStorage.removeItem('sync_uid');
 }
+
+// Invites (admin only; firestore.rules enforce it, these just call through). allowlist/<lowercase email> = { added: ms }.
+export const isAdmin = () => (uid ? getDoc(doc(db, 'admins', uid)).then((d) => d.exists(), () => false) : Promise.resolve(false));
+export const invites = async () => (await getDocsFromServer(collection(db, 'allowlist'))).docs.map((d) => d.id).sort();
+export const invite = (email) => setDoc(doc(db, 'allowlist', email.trim().toLowerCase()), { added: Date.now() });
+export const uninvite = (email) => deleteDoc(doc(db, 'allowlist', email));

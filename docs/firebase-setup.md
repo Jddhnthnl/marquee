@@ -9,8 +9,8 @@ Takes about 10 minutes and uses the free Spark plan, so no card is needed.
 ## 2. Turn on email/password login
 1. In the left menu: **Build → Authentication → Get started**.
 2. On the **Sign-in method** tab, choose **Email/Password**, switch on the first toggle (not "Email link"), and click **Save**.
-3. On the **Settings** tab, open **User actions** and **untick "Enable create (sign-up)"**. Accounts can now only be made by you, from the console.
-4. On the **Users** tab, click **Add user** and enter your email and a password. Repeat for each friend.
+3. On the **Settings** tab, open **User actions** and leave **"Enable create (sign-up)"** ticked. Anyone can try to make an account in the app, but only invited emails are kept: other accounts are deleted at once, and invited ones must confirm their email first.
+4. On the **Users** tab, click **Add user** and enter your own email and a password. Friends make their own accounts in the app after you invite them.
 
 ## 3. Create the database
 1. **Build → Firestore Database → Create database**.
@@ -22,9 +22,10 @@ Takes about 10 minutes and uses the free Spark plan, so no card is needed.
 Rules only let in accounts whose email is on the invite list.
 1. On the Firestore **Data** tab, click **Start collection** and set the collection ID to `allowlist`.
 2. Set the document ID to your email in **lowercase** (e.g. `you@gmail.com`). Add one field, `added` (type boolean, value `true`), and save.
-3. Add one document like this for each friend.
+3. Make yourself the admin: start a collection `admins`, set the document ID to your **User UID** (copy it from Authentication → Users), and add a field `added` (boolean, `true`).
+4. Your own account must have a confirmed email. Accounts added from the console start unconfirmed. Sign in once in the app, and it sends you the confirmation link.
 
-To remove someone, delete their allowlist document; you can also disable them under Authentication → Users.
+After that, invite and remove friends in the app under **Settings → System → Invites**. A removed friend is signed out the next time they open Marquee. You can also disable someone under Authentication → Users.
 
 ## 5. Send me the config
 1. Click the ⚙ next to **Project Overview → Project settings**.

@@ -301,6 +301,9 @@
   .home-rows li { display: grid; grid-template-columns: auto 1fr repeat(3, auto); align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--aisle); }
   .home-rows li.off > span { color: var(--usher); opacity: .6; }
   .home-rows .switch { margin: 0; }
+  .invites li { grid-template-columns: minmax(0, 1fr) auto; }
+  .invites li > span:first-child { overflow-wrap: anywhere; }
+  .invite-add { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
   .btn.icon { width: 36px; padding: 0; justify-content: center; }
   .home-rows li:not(:has(.pin)) { grid-template-columns: auto 1fr auto auto; }
   .row-name { min-height: 36px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--screen); font: inherit; }

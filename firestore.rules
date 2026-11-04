@@ -1,15 +1,32 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Signed in AND on the invite list (allowlist/<lowercase email>, readable only from the console).
+    function email() { return request.auth.token.email.lower(); }
+    // Signed in, email verified (sign-up is open, so an unverified email proves nothing) AND on the invite list.
     function invited() {
-      return request.auth != null
-        && exists(/databases/$(database)/documents/allowlist/$(request.auth.token.email.lower()));
+      return request.auth != null && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/allowlist/$(email()));
+    }
+    // admins/<uid> is created by hand; keeps the admin's email out of this public file.
+    function admin() {
+      return invited() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    // Each account only sees its own data: users/<uid>/profiles/<profileId>, etc.
+    // Each account only sees its own data: users/<uid>/kv/<key>.
     match /users/{uid}/{doc=**} {
       allow read, write: if invited() && request.auth.uid == uid;
+    }
+
+    // allowlist/<lowercase email>: you may check your own invite; only the admin lists, adds and removes.
+    match /allowlist/{e} {
+      allow get: if request.auth != null && e == email();
+      allow list: if admin();
+      allow create: if admin() && e == e.lower() && request.resource.data.keys().hasOnly(['added']);
+      allow delete: if admin() && e != email(); // the admin can't lock themselves out
+    }
+
+    match /admins/{uid} {
+      allow get: if request.auth != null && request.auth.uid == uid;
     }
   }
 }

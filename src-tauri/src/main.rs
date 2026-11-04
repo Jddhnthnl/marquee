@@ -9,11 +9,16 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 
 /// mpv properties the controls window shows, pushed to it as they change.
 const PROPS: &[&str] = &["pause", "time-pos", "duration", "volume", "mute", "speed", "track-list", "sid", "aid",
     "media-title", "demuxer-cache-time", "paused-for-cache", "seeking", "chapter-list", "eof-reached"];
+
+#[derive(Default)]
+struct DiscordState(Mutex<Option<(String, DiscordIpcClient)>>);
 
 #[derive(Default)]
 struct Player {
@@ -157,11 +162,20 @@ fn mpv_path() -> PathBuf {
         .unwrap_or_else(|| "mpv".into())
 }
 
-/// Ask before installing: a silent restart could land mid-movie.
-async fn check_update(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+/// Check for updates on the stable or beta channel. Asks before installing so it never interrupts a film.
+#[tauri::command]
+async fn check_update(app: AppHandle, channel: Option<String>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
     use tauri_plugin_updater::UpdaterExt;
-    let Some(update) = app.updater()?.check().await? else { return Ok(()) };
+    let updater = if channel.as_deref() == Some("beta") {
+        let beta_url = Url::parse("https://github.com/Jddhnthnl/marquee/releases/download/beta/latest-beta.json")
+            .map_err(|e| e.to_string())?;
+        app.updater_builder().endpoints(vec![beta_url]).map_err(|e| e.to_string())?.build().map_err(|e| e.to_string())?
+    } else {
+        app.updater().map_err(|e| e.to_string())?
+    };
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else { return Ok(None) };
+    let ver = update.version.clone();
     let app2 = app.clone();
     app.dialog()
         .message(format!("Marquee {} is available. Install it now? Marquee will close and restart.", update.version))
@@ -175,6 +189,50 @@ async fn check_update(app: AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 }
             });
         });
+    Ok(Some(ver))
+}
+
+#[tauri::command]
+fn notify(app: AppHandle, title: String, body: String) -> Result<(), String> {
+    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn discord_set(discord: State<DiscordState>, app_id: String, details: String, status: Option<String>, start: Option<i64>) -> Result<(), String> {
+    let mut lock = discord.0.lock().map_err(|_| "poisoned")?;
+    let needs_new = match lock.as_ref() {
+        Some((id, _)) if id == &app_id => false,
+        _ => true,
+    };
+    if needs_new {
+        if let Some((_, mut old)) = lock.take() { let _ = old.close(); }
+        let mut client = DiscordIpcClient::new(&app_id).map_err(|e| e.to_string())?;
+        if client.connect().is_ok() {
+            *lock = Some((app_id, client));
+        } else {
+            return Err("discord not running".into());
+        }
+    }
+    if let Some((_, client)) = lock.as_mut() {
+        let mut act = activity::Activity::new().details(&details);
+        if let Some(s) = status.as_deref() { act = act.state(s); }
+        if let Some(ts) = start { act = act.timestamps(activity::Timestamps::new().start(ts)); }
+        if client.set_activity(act).is_err() {
+            let _ = client.close();
+            *lock = None;
+            return Err("discord disconnected".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn discord_clear(discord: State<DiscordState>) -> Result<(), String> {
+    let mut lock = discord.0.lock().map_err(|_| "poisoned")?;
+    if let Some((_, mut client)) = lock.take() {
+        let _ = client.clear_activity();
+        let _ = client.close();
+    }
     Ok(())
 }
 
@@ -273,13 +331,12 @@ fn raise_mpv(parent: isize) {
 fn main() {
     tauri::Builder::default()
         .manage(Player::default())
+        .manage(DiscordState::default())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let h = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = check_update(h).await { eprintln!("update check failed: {e}"); } // offline etc: just skip
-            });
+            // the launch update check runs from app.js, which knows the profile's channel
             let main = app.get_webview_window("main").expect("main window");
             let m = main.clone();
             main.on_window_event(move |e| {
@@ -292,7 +349,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe])
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe, check_update, notify, discord_set, discord_clear])
         .run(tauri::generate_context!())
         .expect("error while running Marquee");
 }

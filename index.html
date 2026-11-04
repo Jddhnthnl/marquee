@@ -14,7 +14,7 @@
   /* Screening room: petrol dark, projector-white text, one tungsten accent. */
   :root {
     color-scheme: dark;
-    --seat: #14202A; --aisle: #1E2D39; --aisle-2: #283A48;
+    --seat: #14202A; --seat-rgb: 20 32 42; --aisle: #1E2D39; --aisle-2: #283A48;
     --screen: #EDE6D8; --usher: #8FA3B0; --tungsten: #F0B35A; --glow: 240 179 90; --exit: #E0644F; --bulb-off: #4A3D2A;
     --display: 'Big Shoulders Display', 'Arial Narrow', sans-serif;
     --body: 'Atkinson Hyperlegible', system-ui, sans-serif;
@@ -26,8 +26,29 @@
   html[data-accent=red] { --tungsten: #E8564A; --glow: 232 86 74; }
   html[data-accent=plum] { --tungsten: #C48FDC; --glow: 196 143 220; }
   html[data-accent=green] { --tungsten: #5FD38A; --glow: 95 211 138; }
+  html[data-poster=XS] { --poster: clamp(88px, 8vw, 112px); }
   html[data-poster=S] { --poster: clamp(104px, 10vw, 136px); }
+  html[data-poster=ML] { --poster: clamp(136px, 14.5vw, 192px); }
   html[data-poster=L] { --poster: clamp(150px, 16vw, 216px); }
+  html[data-poster=XL] { --poster: clamp(170px, 19vw, 252px); }
+  html[data-amoled=on] { --seat: #000; --seat-rgb: 0 0 0; --aisle: #0E1418; --aisle-2: #1A2329; }
+  html { --r: 3px; }
+  html[data-radius=sharp] { --r: 0; } html[data-radius=subtle] { --r: 1.5px; } html[data-radius=rounded] { --r: 10px; } html[data-radius=pill] { --r: 18px; }
+  html[data-labels=off] .poster > .poster-title, html[data-labels=off] .poster > .poster-year { display: none; }
+  /* landscape cards: the backdrop with the title's logo, 16:9 at the same height feel */
+  html[data-landscape=on] .row > .poster:not(.wide) { flex-basis: calc(var(--poster) * 1.6); width: calc(var(--poster) * 1.6); }
+  html[data-landscape=on] .row > .skeleton { flex-basis: calc(var(--poster) * 1.6); aspect-ratio: 16/9; }
+  html[data-landscape=on] .poster .art img, .poster.wide .art img { aspect-ratio: 16/9; }
+  .poster.wide { flex-basis: calc(var(--poster) * 1.6); width: calc(var(--poster) * 1.6); }
+  .art img.card-logo { position: absolute; left: 8%; bottom: 10%; width: 60%; max-height: 40%; aspect-ratio: auto; object-fit: contain; object-position: left bottom;
+    filter: drop-shadow(0 2px 6px rgb(0 0 0 / .7)); }
+  .spoil > img:first-child { filter: blur(14px) brightness(.7); scale: 1.1; }
+  .tag { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; background: var(--tungsten); color: #1B1408; font-weight: 700; font-size: .78rem; }
+  .hero-gap { height: 96px; }
+  /* detail page background: Cinematic lets the poster's blur fill the room, Dominant color washes it in one tone */
+  body[data-bg=cinematic] #ambient.on { opacity: .85; }
+  body[data-bg=color] #ambient { display: none; }
+  body[data-bg=color] { background: radial-gradient(120% 90% at 70% 0%, rgb(var(--tint) / .45), transparent 70%) fixed, var(--seat); }
   html[data-intro=off] #intro { display: none; }
   /* ---- depth layers: ambilight behind everything, film grain over the page (under nav + player) ---- */
   #ambient { position: fixed; inset: -12%; z-index: -2; opacity: 0; pointer-events: none; transition: opacity 1.4s ease;
@@ -72,8 +93,8 @@
              scale: 1.08; translate: calc(var(--px, 0) * -26px) calc(var(--py, 0) * -18px); transition: translate .9s var(--ease-soft);
              mask-image: linear-gradient(#000 55%, transparent 98%); } /* dissolves into the ambilight below */
   .hero::after { content: ''; position: absolute; inset: 0; z-index: -1;
-                 background: linear-gradient(to top, rgb(20 32 42 / .7), transparent 45%),
-                             linear-gradient(to right, rgb(20 32 42 / .92) 0%, rgb(20 32 42 / .35) 55%, transparent 80%); }
+                 background: linear-gradient(to top, rgb(var(--seat-rgb) / .7), transparent 45%),
+                             linear-gradient(to right, rgb(var(--seat-rgb) / .92) 0%, rgb(var(--seat-rgb) / .35) 55%, transparent 80%); }
   .hero-body { max-width: 62ch; translate: calc(var(--px, 0) * 10px) calc(var(--py, 0) * 6px); transition: translate .9s var(--ease-soft); }
   .hero-art { flex: 0 0 clamp(180px, 17vw, 270px); align-self: center; margin-left: auto; perspective: 1000px;
               translate: calc(var(--px, 0) * 34px) calc(var(--py, 0) * 22px); transition: translate .9s var(--ease-soft);
@@ -122,7 +143,7 @@
   .art, [data-tilt] { transform: perspective(800px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)) scale(var(--lift, 1));
                       transition: transform .6s var(--ease-out), box-shadow .6s var(--ease-out); }
   [data-tilt].is-tilting { --lift: 1.05; transition-duration: .15s, .6s; }
-  .art { position: relative; display: block; border-radius: 3px; overflow: clip; background: var(--aisle); }
+  .art { position: relative; display: block; border-radius: var(--r); overflow: clip; background: var(--aisle); }
   .art img { width: 100%; aspect-ratio: 2/3; object-fit: cover; }
   .art::after { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s ease;
                 background: radial-gradient(circle at var(--mx, 50%) var(--my, 0%), rgb(255 244 222 / .32), transparent 55%); }
@@ -140,9 +161,9 @@
     16%, 90% { transform: none; opacity: 1; }
     100% { transform: perspective(900px) rotateY(-38deg) scale(.86); opacity: .35; }
   }
-  .meter { position: absolute; inset: auto 0 0; display: block; height: 3px; background: rgb(20 32 42 / .8); }
+  .meter { position: absolute; inset: auto 0 0; display: block; height: 3px; background: rgb(var(--seat-rgb) / .8); }
   .meter span { display: block; height: 100%; background: var(--tungsten); }
-  .skeleton { flex: 0 0 var(--poster); aspect-ratio: 2/3; border-radius: 3px;
+  .skeleton { flex: 0 0 var(--poster); aspect-ratio: 2/3; border-radius: var(--r);
               background: linear-gradient(100deg, var(--aisle) 40%, var(--aisle-2) 50%, var(--aisle) 60%) 0 0/300% 100%; animation: shimmer 1.6s linear infinite; }
   .skeleton.line { aspect-ratio: auto; height: 58px; margin-bottom: 8px; border-radius: 6px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--poster), 1fr)); gap: 24px 14px; }
@@ -277,10 +298,63 @@
   .btn.danger:not(.quiet) { background: var(--exit); color: #1B1408; }
   .confirm { margin: 0 0 12px; color: var(--screen); font-weight: 700; }
   .home-rows { list-style: none; margin: 0; padding: 0; max-width: 560px; }
-  .home-rows li { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--aisle); }
+  .home-rows li { display: grid; grid-template-columns: auto 1fr repeat(3, auto); align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--aisle); }
   .home-rows li.off > span { color: var(--usher); opacity: .6; }
   .home-rows .switch { margin: 0; }
   .btn.icon { width: 36px; padding: 0; justify-content: center; }
+  .home-rows li:not(:has(.pin)) { grid-template-columns: auto 1fr auto auto; }
+  .row-name { min-height: 36px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--screen); font: inherit; }
+  .row-name:hover { border-color: var(--aisle-2); } .row-name:focus { outline: none; border-color: var(--tungsten); background: var(--aisle); }
+  .row-name::placeholder { color: var(--screen); opacity: 1; }
+  .home-rows li.off .row-name { color: var(--usher); opacity: .6; }
+  .pin svg { width: 16px; height: 16px; } .pin[aria-pressed=true] { color: var(--tungsten); }
+
+  /* settings: a lobby directory down the side, the section you're in has its bulb lit */
+  .set-layout { display: grid; grid-template-columns: 12rem minmax(0, 860px); gap: 56px; align-items: start; }
+  .set-index { position: sticky; top: 96px; }
+  .set-index ol { list-style: none; margin: 46px 0 0; padding: 0; border-left: 1px solid var(--aisle-2); }
+  .set-index button { position: relative; display: block; width: 100%; padding: 7px 0 7px 22px; background: none; border: 0; text-align: left;
+    color: var(--usher); font: 600 1.25rem/1.1 var(--display); letter-spacing: .01em; cursor: pointer; transition: color 180ms ease; }
+  .set-index button::before { content: ''; position: absolute; left: -5px; top: 50%; width: 9px; height: 9px; margin-top: -4.5px; border-radius: 50%;
+    background: var(--bulb-off); transition: background 220ms ease, box-shadow 220ms ease; }
+  .set-index button:hover { color: var(--screen); }
+  .set-index button[aria-current] { color: var(--screen); }
+  .set-index button[aria-current]::before { background: var(--tungsten); box-shadow: 0 0 10px 2px rgb(var(--glow) / .7); }
+  .set-index button:focus-visible { outline: 2px solid var(--screen); outline-offset: 2px; }
+  .set-main > section:first-child { margin-top: 0; }
+  .settings [id^=s-] { scroll-margin-top: 96px; }
+  @media (max-width: 900px) {
+    .set-layout { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .set-index { top: 60px; z-index: 2; margin-inline: calc(var(--gutter) * -1); padding: 6px var(--gutter); background: var(--seat); overflow-x: auto; }
+    .set-index ol { display: flex; gap: 4px; margin: 0; border: 0; }
+    .set-index button { padding: 8px 12px 8px 20px; white-space: nowrap; }
+    .set-index button::before { left: 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .set-index button, .set-index button::before { transition: none; } }
+  .chips input:checked + span::before { content: '✓'; margin-right: 6px; }
+  .swatches { align-items: center; }
+  .swatches input[type=color] { position: static; opacity: 1; width: 40px; height: 40px; padding: 0; border: 1px solid var(--aisle-2); border-radius: 50%; background: none; cursor: pointer; }
+  .swatches input[type=color]::-webkit-color-swatch-wrapper { padding: 3px; }
+  .swatches input[type=color]::-webkit-color-swatch { border: 0; border-radius: 50%; }
+  .tune { display: grid; gap: 10px; }
+  .tune > div { display: grid; grid-template-columns: 7rem 1fr; align-items: center; color: var(--usher); }
+  .lang.text { min-width: min(24rem, 100%); }
+  [aria-invalid=true] { border-color: var(--exit) !important; }
+  /* details: the extras under episodes and streams */
+  .season-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .extra { padding: 0 var(--gutter); margin-top: 40px; }
+  .extra h2 { margin: 0 0 14px; font: 700 1.6rem/1 var(--display); }
+  .extra .row { padding-inline: 0; }
+  .cast { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; max-width: 960px; }
+  .cast li { padding: 6px 14px; border: 1px solid var(--aisle-2); border-radius: 999px; color: var(--screen); }
+  .clip { flex: 0 0 calc(var(--poster) * 1.6); padding: 0; background: none; border: 0; color: var(--screen); text-align: left; font: inherit; cursor: pointer; }
+  .clip .art img { aspect-ratio: 16/9; }
+  .clip:focus-visible .art { outline: 2px solid var(--tungsten); outline-offset: 3px; }
+  #extras { padding-bottom: 40px; }
+  /* launch: carry on watching */
+  dialog.resume { max-width: 26rem; padding: 24px 26px; border: 1px solid var(--aisle-2); border-radius: 12px; background: var(--aisle); color: var(--screen); }
+  dialog.resume::backdrop { background: rgb(0 0 0 / .55); }
+  dialog.resume p { margin: 0 0 18px; font-size: 1.08rem; }
 
   /* ---- player ---- */
   .player { position: fixed; inset: 0; z-index: 9; background: #000; display: flex; flex-direction: column; }
@@ -304,7 +378,7 @@
   .bulbs button[aria-current]::before { background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(var(--glow) / .9), 0 0 22px 4px rgb(var(--glow) / .35); }
   .sound { width: 44px; padding: 0; justify-content: center; }
   .sound[aria-pressed="false"] .wave { opacity: .25; }
-  .sound.on-media { position: absolute; right: 10px; bottom: 10px; z-index: 1; width: 36px; min-height: 36px; background: rgb(20 32 42 / .72); border-color: transparent; }
+  .sound.on-media { position: absolute; right: 10px; bottom: 10px; z-index: 1; width: 36px; min-height: 36px; background: rgb(var(--seat-rgb) / .72); border-color: transparent; }
 
   /* ---- hover card ---- */
   .peek { position: fixed; z-index: 8; display: grid; border-radius: 8px; overflow: hidden; cursor: pointer; background: var(--aisle);
@@ -409,7 +483,10 @@
 </style>
 <script>/* the profile's Look before the first paint, so the accent and intro never flash (app.js keeps it current) */
 try { const p = JSON.parse(localStorage.getItem('profiles')), s = JSON.parse(localStorage.getItem('settings_' + (p ? p.active : '1'))) || {}, d = document.documentElement.dataset;
-  d.accent = s.accent || 'tungsten'; d.poster = s.posterSize || 'M'; d.intro = s.intro === false ? 'off' : 'on'; } catch {}</script>
+  d.accent = s.accent || 'tungsten'; d.poster = s.posterSize || 'M'; d.intro = s.intro === false ? 'off' : 'on';
+  d.amoled = s.amoled ? 'on' : 'off'; d.radius = s.posterRadius || 'classic'; d.labels = s.posterLabels === false ? 'off' : 'on'; d.landscape = s.landscape ? 'on' : 'off';
+  const m = s.accent === 'custom' && /^#([0-9a-f]{6})$/i.exec(s.accentHex || '');
+  if (m) { const n = parseInt(m[1], 16), st = document.documentElement.style; st.setProperty('--tungsten', s.accentHex); st.setProperty('--glow', (n >> 16) + ' ' + (n >> 8 & 255) + ' ' + (n & 255)); } } catch {}</script>
 </head>
 <body>
 <div id="intro" aria-hidden="true"><div class="curtain"></div><div class="curtain"></div>

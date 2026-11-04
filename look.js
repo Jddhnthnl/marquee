@@ -1,7 +1,19 @@
 // Look and profile rules: accents, poster size, home row order, avatars. Pure, so node can test them (look.test.mjs).
 
-export const LOOK_DEFAULTS = { accent: 'tungsten', posterSize: 'M', homeRows: { order: [], hidden: [] },
-  bannerTrailer: true, hoverTrailer: true, hoverDelay: 700, intro: true };
+export const LOOK_DEFAULTS = { accent: 'tungsten', accentHex: '#4FB3C8', amoled: false, posterSize: 'M', posterRadius: 'classic', posterLabels: true, landscape: false, intro: true,
+  // Home
+  homeRows: { order: [], hidden: [], pinned: [] }, rowNames: {}, hero: true, heroRows: [], hideUnreleased: false,
+  bannerTrailer: true, hoverTrailer: true, hoverDelay: 700, hoverSound: false, trailerStart: 0,
+  // Detail page
+  detailSections: { order: [], hidden: [] }, detailBg: 'normal', blurUnwatched: false,
+  // Continue watching
+  cw: true, cwStyle: 'poster', cwSort: 'recent', cwNextUp: true, cwUpcoming: true, cwBlur: false, resumePrompt: false,
+  // System
+  updateChannel: 'stable', rememberProfile: false, discord: false, discordId: '', alerts: false, librarySort: 'added' };
+
+export const POSTER_SIZES = [['XS', 'Compact'], ['S', 'Dense'], ['M', 'Standard'], ['ML', 'Balanced'], ['L', 'Comfort'], ['XL', 'Large']];
+export const RADII = [['sharp', 'Sharp'], ['subtle', 'Subtle'], ['classic', 'Classic'], ['rounded', 'Rounded'], ['pill', 'Soft']];
+export const DETAIL_SECTIONS = { cast: 'Cast', trailers: 'Trailers', more: 'More like this' }; // below the episodes and sources, which stay put
 
 // [name, color, the same color as "r g b" for glows]
 export const ACCENTS = {
@@ -35,8 +47,10 @@ export const AVATARS = {
 };
 
 // Home rows as the settings list shows them: the saved order first, rows never arranged keep their place after, rows that no longer exist drop out.
-export function orderRows(keys, { order = [], hidden = [] } = {}) {
-  const sorted = [...order.filter((k) => keys.includes(k)), ...keys.filter((k) => !order.includes(k))];
+// Pinned rows go on top.
+export function orderRows(keys, { order = [], hidden = [], pinned = [] } = {}) {
+  const all = [...order.filter((k) => keys.includes(k)), ...keys.filter((k) => !order.includes(k))];
+  const sorted = [...all.filter((k) => pinned.includes(k)), ...all.filter((k) => !pinned.includes(k))];
   return sorted.map((key) => ({ key, shown: !hidden.includes(key) }));
 }
 
@@ -52,5 +66,50 @@ let last = 0;
 export const newProfileId = () => (last = Math.max(Date.now(), last + 1)).toString(36);
 
 // Saved settings without the keys of one Settings section.
-const sectionOf = (k) => (k in LOOK_DEFAULTS ? 'look' : k.startsWith('sub') ? 'subtitles' : 'playback');
+const SECTIONS = {
+  streams: ['quality', 'streamMode', 'rules', 'customRule', 'streamWait', 'sameGroup'],
+  player: ['player', 'externalPath', 'audioLang', 'holdSpeed', 'showRemaining', 'fit', 'brightness', 'contrast', 'saturation', 'gamma', 'deband'],
+  look: ['accent', 'accentHex', 'amoled', 'posterSize', 'posterRadius', 'posterLabels', 'landscape', 'intro'],
+  home: ['homeRows', 'rowNames', 'hero', 'heroRows', 'hideUnreleased', 'bannerTrailer', 'hoverTrailer', 'hoverDelay', 'hoverSound', 'trailerStart'],
+  detail: ['detailSections', 'detailBg', 'blurUnwatched'],
+  cw: ['cw', 'cwStyle', 'cwSort', 'cwNextUp', 'cwUpcoming', 'cwBlur', 'resumePrompt'],
+  system: ['updateChannel', 'rememberProfile', 'discord', 'discordId', 'alerts', 'librarySort'],
+};
+export const sectionOf = (k) => Object.keys(SECTIONS).find((s) => SECTIONS[s].includes(k)) ?? (k.startsWith('sub') ? 'subtitles' : 'playback');
 export const resetSection = (saved, section) => Object.fromEntries(Object.entries(saved).filter(([k]) => sectionOf(k) !== section));
+
+// Custom accent '#rrggbb' as 'r g b' for the glow CSS variable; anything else is null.
+export const accentFromHex = (hex) => (/^#[0-9a-f]{6}$/i.test(hex ?? '') ? [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(' ') : null);
+
+// A catalog item that hasn't come out yet. No date: assume it's out.
+export function isUnreleased(m, now = Date.now()) {
+  if (m.released) return Date.parse(m.released) > now;
+  const y = parseInt(m.releaseInfo, 10);
+  return y > new Date(now).getUTCFullYear();
+}
+
+// Continue watching. Series: the furthest episode; once it's finished, the next one (fetched meta) or, if it hasn't aired, the Upcoming row.
+const done = (p) => p.durationMs > 0 && p.positionMs / p.durationMs >= 0.95;
+const epOrder = (a, b) => (a.season - b.season) || (a.episode - b.episode);
+function shows(prog) {
+  const by = {};
+  for (const p of Object.values(prog)) if (p.durationMs) (by[p.metaId] ??= []).push(p);
+  return Object.values(by).map((list) => ({ list, newest: Math.max(...list.map((p) => p.updatedAt)),
+    furthest: list[0].type === 'movie' ? list[0] : [...list].sort(epOrder).at(-1) }));
+}
+export const needsMeta = (prog, set) => (set.cwNextUp ? shows(prog).filter((s) => s.furthest.season != null && done(s.furthest)).map((s) => s.furthest.metaId) : []);
+export function continueRows(prog, metas, set, now = Date.now()) {
+  const resume = [], upcoming = [];
+  for (const s of shows(prog).sort((a, b) => b.newest - a.newest)) {
+    const last = set.cwNextUp ? s.furthest : [...s.list].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (!done(last)) { resume.push(last); continue; }
+    if (!set.cwNextUp || last.season == null) continue;
+    const eps = (metas[last.metaId]?.videos ?? []).filter((v) => v.season > 0).sort(epOrder);
+    const v = eps.find((e) => epOrder(e, last) > 0);
+    if (!v) continue;
+    const item = { ...last, videoId: v.id, season: v.season, episode: v.episode, positionMs: 0, durationMs: 0, next: true, thumbnail: v.thumbnail, released: v.released, stream: null };
+    if (v.released && Date.parse(v.released) <= now) resume.push(item);
+    else if (set.cwUpcoming) upcoming.push(item);
+  }
+  return { resume, upcoming };
+}

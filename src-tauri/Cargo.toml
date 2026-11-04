@@ -13,6 +13,8 @@ windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] } # sa
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] } # already built for the updater
+discord-rich-presence = "0.2.4"
+tauri-plugin-notification = "2"
 
 [profile.release]
 strip = true

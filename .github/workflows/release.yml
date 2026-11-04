@@ -1,5 +1,6 @@
 # Push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json) to build and publish a release.
-# The app's updater reads latest.json from the newest release.
+# The app's updater reads latest.json from the newest release. A tag with a dash (v0.7.1-beta.1) is a prerelease,
+# which only the Beta channel sees: every release also refreshes latest-beta.json on the fixed "beta" release.
 name: release
 on:
   push:
@@ -31,3 +32,12 @@ jobs:
           releaseName: Marquee ${{ github.ref_name }}
           releaseBody: Download the -setup.exe below. Windows may warn "Windows protected your PC" — click More info → Run anyway.
           releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+      - name: Publish to the Beta channel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" -p latest.json -O latest-beta.json
+          gh release view beta >/dev/null 2>&1 || gh release create beta --prerelease --title 'Beta channel' --notes 'Update manifest for the Beta channel. Not an installer.'
+          gh release upload beta latest-beta.json --clobber

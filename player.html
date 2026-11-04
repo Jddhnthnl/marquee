@@ -274,7 +274,7 @@
 </aside>
 
 <script type="module">
-import { PLAYBACK_DEFAULTS, SUB_COLORS, subProps, pickSub, segmentAt, nextCardAt, fromChapters } from './playback.js';
+import { PLAYBACK_DEFAULTS, SUB_COLORS, subProps, videoProps, pickSub, pickAudio, segmentAt, nextCardAt, fromChapters } from './playback.js';
 const { invoke } = window.__TAURI__.core;
 const $ = (s) => document.querySelector(s);
 const cmd = (...args) => invoke('mpv_cmd', { args }).catch(() => null);
@@ -336,7 +336,7 @@ function render(k) {
 // Skip intro/recap and the next-episode card, driven by the Playback settings Marquee sends in info.settings
 const opt = () => ({ ...PLAYBACK_DEFAULTS, ...info.settings });
 let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer; // card: none | shown | done
-function newEpisode() { subChosen = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
+function newEpisode() { subChosen = audioChosen = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
 const segs = () => (info.segments?.length ? info.segments : fromChapters(s['chapter-list'], s.duration));
 const nextEp = () => info.next && (info.episodes || []).find((e) => e.id === info.next);
 function timeline() {
@@ -357,7 +357,7 @@ function timeline() {
     else if (seg) cmd('seek', seg.end, 'absolute');
     $('#skip').hidden = true;
   };
-  const at = nextCardAt(segs(), s.duration);
+  const at = nextCardAt(segs(), s.duration, o.nextWhen);
   if (card === 'shown' && pos < at - 1) hideCard('none'); // seeked back before the credits
   if (card === 'none' && nextEp() && o.nextDelay > 0 && at != null && pos >= at) showCard(o.nextDelay);
   if (s['eof-reached']) { // keep-open: mpv holds the last frame instead of closing
@@ -395,27 +395,41 @@ addEventListener('pointerdown', () => { autoRun = 0; }, true);
 addEventListener('keydown', () => { autoRun = 0; }, true);
 
 // Picture size: mpv keeps the film's shape (fit), crops to fill the screen, or stretches it
-const FITS = { fit: ['Fit', 'Whole picture, bars if the shapes differ', 'yes', 0], fill: ['Fill', 'Fill the screen, crop the edges', 'yes', 1], stretch: ['Stretch', 'Fill the screen, distort the picture', 'no', 0] };
-let fit = localStorage.getItem('player_fit') in FITS ? localStorage.getItem('player_fit') : 'fit';
+// The default comes from Settings; changing it here lasts until the player closes.
+const FITS = { fit: ['Fit', 'Whole picture, bars if the shapes differ', 'yes', 0, 0], fill: ['Fill', 'Fill the screen, crop the edges', 'yes', 1, 0],
+  zoom: ['Zoom', 'Closer than Fill, crops more', 'yes', 1, 0.15], stretch: ['Stretch', 'Fill the screen, distort the picture', 'no', 0, 0] };
+let fit = 'fit', started = false;
 function setFit(k, say) {
-  fit = k; localStorage.setItem('player_fit', k);
-  cmd('set_property', 'keepaspect', FITS[k][2] === 'yes'); cmd('set_property', 'panscan', FITS[k][3]);
+  fit = k;
+  cmd('set_property', 'keepaspect', FITS[k][2] === 'yes'); cmd('set_property', 'panscan', FITS[k][3]); cmd('set_property', 'video-zoom', FITS[k][4]);
   $('[data-menu=fit]').setAttribute('aria-label', `Picture: ${FITS[k][0]} (A)`);
   if (say) toast(`Picture: ${FITS[k][0]}`);
 }
 
 // What's playing, from Marquee's main page: details, episodes, sources
-let info = {}, panel = null, epSeason = null;
+let info = {}, panel = null, epSeason = null, pic = { brightness: 0, contrast: 0, saturation: 0, gamma: 0, deband: false };
 const ask = (req) => window.__TAURI__.event.emitTo('main', 'player-request', req);
-let subChosen = false; // you picked a track yourself: stop choosing for you until the next episode
+let subChosen = false, audioChosen = false; // you picked a track yourself: stop choosing for you until the next episode
 function applySubs() {
-  for (const [k, v] of subProps(opt())) cmd('set_property', k, v);
+  const o = opt(), tracks = s['track-list'];
+  for (const [k, v] of subProps(o)) cmd('set_property', k, v);
+  const aid = audioChosen ? null : pickAudio(tracks, o.audioLang);
+  if (aid != null && s.aid !== aid) cmd('set_property', 'aid', aid);
   if (subChosen) return;
-  const o = opt(), id = pickSub(s['track-list'], [o.subLang1, o.subLang2]);
+  const audio = tracks.find((t) => t.type === 'audio' && t.id === (aid ?? s.aid))?.lang ?? '';
+  const id = pickSub(tracks, [o.subLang1, o.subLang2], { onlyMine: o.subOnlyMine, forced: o.subForced, audio });
   if (id != null && s.sid !== id) cmd('set_property', 'sid', id); // re-checked as tracks appear, so a better language that loads late still wins
 }
 function applyInfo(i) {
   info = i || {};
+  if (!started && info.settings) { // first info for this player: the Settings defaults for clock, picture size and picture tuning
+    started = true;
+    const o = opt();
+    showTotal = !o.showRemaining; render('time-pos');
+    setFit(o.fit in FITS ? o.fit : 'fit');
+    pic = Object.fromEntries(videoProps(o));
+    for (const [k, v] of Object.entries(pic)) cmd('set_property', k, v);
+  }
   applySubs();
   $('#eps-btn').hidden = !info.episodes?.length;
   $('#next').hidden = !info.next;
@@ -430,7 +444,7 @@ function openPanel(name, refresh) {
   closeMenus();
   panel = name;
   const body = $('#drawer-body');
-  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitle style', info: info.name || 'Info' }[name];
+  $('#drawer-title').textContent = { episodes: 'Episodes', sources: 'Sources', style: 'Subtitle style', picture: 'Picture', info: info.name || 'Info' }[name];
   if (name === 'episodes') {
     const eps = info.episodes || [];
     const seasons = [...new Set(eps.map((e) => e.season))];
@@ -491,6 +505,20 @@ function openPanel(name, refresh) {
       choice('subEdge', 'Edge', [['none', 'None'], ['shadow', 'Shadow'], ['outline', 'Outline'], ['box', 'Box']]),
       slider('subLift', 'Height', 0, 30, 1, (v) => (v ? `${v}% up` : 'Bottom')),
       el('p', { className: 'empty', textContent: 'Saved to this profile. Languages and the rest are in Settings in Marquee.' }));
+  } else if (name === 'picture') { // this session only; the defaults are in Settings > Player
+    const row = (key, label) => {
+      const out = el('output', { textContent: pic[key] > 0 ? `+${pic[key]}` : String(pic[key]) });
+      const r = el('input', { type: 'range', min: -50, max: 50, step: 5, value: pic[key] });
+      r.setAttribute('aria-label', label);
+      r.oninput = () => { pic[key] = +r.value; out.textContent = pic[key] > 0 ? `+${pic[key]}` : String(pic[key]); cmd('set_property', key, pic[key]); };
+      return el('div', { className: 'style-row' }, el('h3', { textContent: label }), el('div', { className: 'slide' }, r, out));
+    };
+    const deband = el('button', { textContent: 'Smooth color banding' });
+    deband.setAttribute('aria-pressed', String(pic.deband));
+    deband.onclick = () => { pic.deband = !pic.deband; cmd('set_property', 'deband', pic.deband); deband.setAttribute('aria-pressed', String(pic.deband)); };
+    body.replaceChildren(row('brightness', 'Brightness'), row('contrast', 'Contrast'), row('saturation', 'Saturation'), row('gamma', 'Gamma'),
+      el('div', { className: 'style-row' }, el('div', { className: 'seasons' }, deband)),
+      el('p', { className: 'empty', textContent: 'For this film only. Your defaults are in Settings in Marquee.' }));
   } else {
     const facts = [info.year, info.runtime, (info.genres || []).slice(0, 3).join(', ')].filter(Boolean).join(', ');
     body.replaceChildren(el('div', { className: 'info' },
@@ -565,9 +593,10 @@ function openMenu(name) {
     return b;
   };
   const tracks = (type, prop) => s['track-list'].filter((t) => t.type === type)
-    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => { if (prop === 'sid') subChosen = true; cmd('set_property', prop, t.id); }); });
+    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => { if (prop === 'sid') subChosen = true; else audioChosen = true; cmd('set_property', prop, t.id); }); });
   const styleItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Style…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('style'); return b; };
-  m.replaceChildren(...(name === 'fit' ? Object.entries(FITS).map(([k, [label, sub]]) => item(label, sub, fit === k, () => setFit(k, true)))
+  const picItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Picture…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('picture'); return b; };
+  m.replaceChildren(...(name === 'fit' ? [...Object.entries(FITS).map(([k, [label, sub]]) => item(label, sub, fit === k, () => setFit(k, true))), picItem()]
     : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => { subChosen = true; cmd('set_property', 'sid', 'no'); }), ...tracks('sub', 'sid'), styleItem()]
     : name === 'audio' ? tracks('audio', 'aid')
     : [0.5, 0.75, 1, 1.25, 1.5, 2].map((x) => item(`${x}×`, x === 1 ? 'Normal' : '', Math.abs(s.speed - x) < 0.01, () => cmd('set_property', 'speed', x)))));
@@ -617,13 +646,22 @@ function showWatching() {
 // Windows sends a move without movement when windows reorder above the player; only real moves wake the controls
 let lastXY = '';
 addEventListener('pointermove', (e) => { const xy = `${e.screenX},${e.screenY}`; if (xy !== lastXY) { lastXY = xy; wake(); } });
+let holdTimer = 0, held = null; // held: the speed to go back to
 addEventListener('keydown', (e) => {
   if (e.target.matches?.('input[type=range]') && e.key.startsWith('Arrow')) return;
+  if (e.key === 'ArrowRight') {
+    e.preventDefault(); wake();
+    if (!e.repeat && !holdTimer && held == null) holdTimer = setTimeout(() => {
+      holdTimer = 0; held = s.speed;
+      const x = opt().holdSpeed; cmd('set_property', 'speed', x); toast(`${x}× while you hold`, 100000);
+    }, 350);
+    return;
+  }
   const k = e.key.toLowerCase();
   const act = {
     ' ': togglePause, k: togglePause,
     arrowleft: () => { cmd('seek', -10); toast('Back 10 seconds'); }, j: () => cmd('seek', -10),
-    arrowright: () => { cmd('seek', 10); toast('Forward 10 seconds'); }, l: () => cmd('seek', 10),
+    l: () => cmd('seek', 10),
     arrowup: () => nudgeVolume(5), arrowdown: () => nudgeVolume(-5),
     m: () => cmd('cycle', 'mute'), f: toggleFull, c: () => { subChosen = true; cmd('cycle', 'sub'); },
     a: () => { const ks = Object.keys(FITS); setFit(ks[(ks.indexOf(fit) + 1) % ks.length], true); },
@@ -633,6 +671,13 @@ addEventListener('keydown', (e) => {
   if (!act || (k === ' ' && e.target.tagName === 'BUTTON')) return;
   e.preventDefault(); act(); wake();
 });
+
+addEventListener('keyup', (e) => {
+  if (e.key !== 'ArrowRight' || e.target.matches?.('input[type=range]')) return;
+  if (held != null) { cmd('set_property', 'speed', held); held = null; toast('Normal speed'); }
+  else if (holdTimer) { clearTimeout(holdTimer); holdTimer = 0; cmd('seek', 10); toast('Forward 10 seconds'); }
+});
+addEventListener('blur', () => { if (held != null) { cmd('set_property', 'speed', held); held = null; } clearTimeout(holdTimer); holdTimer = 0; });
 
 // State: snapshot first (events before this page loaded are already gone), then live changes
 (async () => {
@@ -644,7 +689,7 @@ addEventListener('keydown', (e) => {
   await window.__TAURI__.event.listen('player-notice', ({ payload }) => toast(payload, 2600));
   const vol = localStorage.getItem('player_volume');
   if (vol !== null) cmd('set_property', 'volume', +vol);
-  setFit(fit);
+  if (!started) setFit(fit);
   ['pause', 'volume', 'time-pos', 'speed', 'track-list'].forEach(render);
   wake();
 })();

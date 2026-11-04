@@ -1,4 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl, pickAutoPlay } from './protocol.js';
+import { push, watch, signIn, resetPassword, signOutAndForget } from './sync.js';
 
 const DEFAULT_ADDONS = ['https://v3-cinemeta.strem.io/manifest.json']; // catalogs + meta, no keys
 const $ = (s) => document.querySelector(s);
@@ -8,7 +9,7 @@ const calm = matchMedia('(prefers-reduced-motion: reduce)');
 
 // ---------- storage: same key scheme as Nuvio's .properties files (`<name>_<profileId>`) ----------
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
-const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+const save = (k, v) => { const raw = JSON.stringify(v); localStorage.setItem(k, raw); push(k, raw); };
 const profiles = () => load('profiles', { active: '1', list: [{ id: '1', name: 'Main', color: '#3E7C8C' }] });
 const pid = () => profiles().active;
 const pk = (name) => `${name}_${pid()}`;
@@ -507,7 +508,9 @@ function profilesView() {
     <ul class="profiles">${p.list.map((x) => `<li><button data-id="${esc(x.id)}" ${x.id === p.active ? 'aria-current="true"' : ''}>
       <span class="avatar" data-tilt style="--c:${esc(x.color)}">${esc(x.name[0])}</span><span>${esc(x.name)}</span></button></li>`).join('')}
       <li><button id="new"><span class="avatar add">+</span><span>Add profile</span></button></li></ul>
-    <p class="hint">Each profile keeps its own addons, library and progress.</p></section>`;
+    <p class="hint">Each profile keeps its own addons, library and progress.</p>
+    <p class="hint">Signed in as ${esc(account?.email)}. <button class="link" id="signout">Sign out</button></p></section>`;
+  $('#signout').onclick = async () => { await signOutAndForget(); location.hash = '#/'; };
   app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); location.hash = '#/'; }));
   $('#new').onclick = () => {
     const name = prompt('Name for the new profile')?.trim();
@@ -545,8 +548,62 @@ async function route() {
   if (document.startViewTransition && !calm.matches) document.startViewTransition(() => { go(); });
   else go();
 }
-addEventListener('hashchange', route);
-route();
+addEventListener('hashchange', () => account && route());
+
+// ---------- sign-in: the marquee sign lights up bulb by bulb, the form sits in its glow ----------
+let account = null;
+const LOGIN_ERRORS = {
+  'auth/invalid-credential': 'That email and password don’t match. Check both and try again.',
+  'auth/invalid-email': 'That doesn’t look like an email address.',
+  'auth/missing-password': 'Enter your password.',
+  'auth/too-many-requests': 'Too many attempts. Wait a few minutes, then try again.',
+  'auth/network-request-failed': 'Can’t reach the sign-in service. Check your internet connection.',
+  'auth/user-disabled': 'This account is turned off. Ask whoever set up Marquee.',
+  'permission-denied': 'This account isn’t on the invite list yet. Ask whoever set up Marquee to add your email.',
+};
+const loginError = (code) => LOGIN_ERRORS[code] || `Sign-in didn’t work (${code}). Try again.`;
+function signBulbs(across = 15, down = 5) { // clockwise from the top-left corner, so the lighting runs around the frame
+  const pts = [];
+  for (let i = 0; i < across; i++) pts.push([i / (across - 1), 0]);
+  for (let j = 1; j < down; j++) pts.push([1, j / down]);
+  for (let i = 0; i < across; i++) pts.push([1 - i / (across - 1), 1]);
+  for (let j = 1; j < down; j++) pts.push([0, 1 - j / down]);
+  return pts.map(([x, y], i) => `<i style="left:${x * 100}%;top:${y * 100}%;--i:${i}"></i>`).join('');
+}
+function loginView(code) {
+  document.body.classList.add('gated');
+  // When the launch curtain is still up, wait for it to part before the bulbs come on.
+  app.innerHTML = `<section class="gate" style="--lead:${$('#intro') ? 1300 : 0}ms">
+    <div class="sign-board"><span class="sign-bulbs" aria-hidden="true">${signBulbs()}</span><h1>Marquee</h1></div>
+    <form class="gate-form" id="login" novalidate>
+      <label for="em">Email</label><input id="em" type="email" autocomplete="username">
+      <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+      <p class="gate-msg" id="msg" role="alert"></p>
+      <button class="btn primary">Sign in</button>
+      <button type="button" class="link" id="forgot">Forgot password?</button>
+    </form>
+    <p class="hint">Marquee is invite-only. Ask whoever set it up to add your email.</p></section>`;
+  const say = (text, ok = false) => { $('#msg').textContent = text; $('#msg').classList.toggle('ok', ok); };
+  if (code) say(loginError(code));
+  $('#em').focus();
+  $('#login').onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('.primary');
+    btn.disabled = true; btn.textContent = 'Signing in…'; say('');
+    try { await signIn($('#em').value.trim(), $('#pw').value); } // watch() below takes over on success
+    catch (err) { say(loginError(err.code)); btn.disabled = false; btn.textContent = 'Sign in'; }
+  };
+  $('#forgot').onclick = async () => {
+    const email = $('#em').value.trim();
+    if (!email) { $('#em').focus(); return say('Enter your email above, then choose Forgot password again.'); }
+    try { await resetPassword(email); say(`If ${email} has an account, a reset link is on its way. Check spam too.`, true); }
+    catch (err) { say(loginError(err.code)); }
+  };
+}
+watch(
+  (user) => { account = user; document.body.classList.remove('gated'); manifests.clear(); route(); },
+  (code) => { account = null; loginView(code); },
+);
 { // launch intro: plays over the loading app, removes itself; any click or key skips it
   const intro = $('#intro');
   const done = () => intro?.remove();

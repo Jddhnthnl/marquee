@@ -277,6 +277,30 @@
   @keyframes lift { from { transform: translateY(105%); } }
   @keyframes rise { from { opacity: 0; transform: translateY(22px); } }
   @keyframes deal { from { opacity: 0; transform: translateY(60px) rotateY(-50deg) rotateX(12deg); } }
+  /* sign-in: one lit marquee sign, the form standing in its light */
+  body.gated nav { display: none; }
+  .gate { min-height: 100vh; box-sizing: border-box; display: grid; place-content: center; justify-items: center; gap: 40px; padding: 48px var(--gutter);
+          background: radial-gradient(55% 42% at 50% 28%, rgb(240 179 90 / .09), transparent 70%); }
+  .sign-board { position: relative; width: min(440px, 84vw); aspect-ratio: 2.6; display: grid; place-items: center; border-radius: 6px;
+                background: var(--aisle); box-shadow: inset 0 0 0 1px var(--aisle-2), 0 50px 90px -40px rgb(240 179 90 / .4); }
+  .sign-bulbs { position: absolute; inset: 14px; }
+  .sign-bulbs i { position: absolute; width: 10px; aspect-ratio: 1; margin: -5px 0 0 -5px; border-radius: 50%;
+                  background: var(--tungsten); box-shadow: 0 0 6px 1px rgb(240 179 90 / .8), 0 0 18px 4px rgb(240 179 90 / .22);
+                  animation: bulb-on .2s ease-out calc(var(--lead) + var(--i) * 28ms) backwards; }
+  .sign-board h1 { margin: 0; font: 800 clamp(3rem, 11vw, 5.4rem)/1 var(--display); letter-spacing: .02em; color: var(--tungsten);
+                   text-shadow: 0 0 40px rgb(240 179 90 / .45); animation: glow .5s ease-out calc(var(--lead) + 1.05s) backwards; }
+  @keyframes bulb-on { from { background: var(--bulb-off); box-shadow: none; } }
+  .gate-form { width: min(340px, 84vw); display: grid; gap: 6px; }
+  .gate-form label { color: var(--usher); font-size: .9rem; margin-top: 10px; }
+  .gate-form input { width: 100%; box-sizing: border-box; }
+  .gate-form .primary { margin-top: 4px; justify-content: center; }
+  .gate-msg { min-height: 1.4em; margin: 8px 0 0; color: var(--exit); font-size: .92rem; }
+  .gate-msg.ok { color: var(--screen); }
+  .gate .hint { text-align: center; max-width: 36ch; margin: 0; }
+  .link { background: none; border: 0; padding: 0; font: inherit; color: var(--usher); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  .link:hover { color: var(--screen); }
+  .gate-form .link { justify-self: center; padding: 8px; }
+
   /* receding hero: as the first screen scrolls away the backdrop sinks and the words lift off */
   @supports (animation-timeline: view()) {
     .hero { view-timeline-name: --hero; }

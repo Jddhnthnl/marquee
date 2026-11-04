@@ -1,0 +1,14 @@
+{
+  "name": "Marquee",
+  "short_name": "Marquee",
+  "description": "Browse addon catalogs, pick a stream and keep your place.",
+  "start_url": "./#/",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14202A",
+  "theme_color": "#14202A",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

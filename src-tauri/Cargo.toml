@@ -1,0 +1,18 @@
+[package]
+name = "marquee"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] } # same version tauri already pulls in
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+
+[profile.release]
+strip = true
+lto = true

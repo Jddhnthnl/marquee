@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Marquee: a lit sign's bulbs over an M whose belly holds the play triangle -->
+  <defs>
+    <radialGradient id="lamp" cx=".5" cy=".12" r=".9">
+      <stop offset="0" stop-color="#24384A"/>
+      <stop offset="1" stop-color="#14202A"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#lamp)"/>
+  <g fill="#F0B35A">
+    <g filter="url(#glow)" opacity=".75">
+      <circle cx="148" cy="76" r="13"/><circle cx="202" cy="76" r="13"/><circle cx="256" cy="76" r="13"/><circle cx="310" cy="76" r="13"/><circle cx="364" cy="76" r="13"/>
+    </g>
+    <circle cx="148" cy="76" r="10"/><circle cx="202" cy="76" r="10"/><circle cx="256" cy="76" r="10"/><circle cx="310" cy="76" r="10"/><circle cx="364" cy="76" r="10"/>
+  </g>
+  <path fill="#EDE6D8" d="M104 420V124h84l68 84 68-84h84v296h-76V246l-76 66-76-66v174z"/>
+  <path fill="#F0B35A" d="M226 338v72l60-36z" stroke="#F0B35A" stroke-width="10" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,33 @@
+# Push a tag like v0.2.0 (matching "version" in src-tauri/tauri.conf.json) to build and publish a release.
+# The app's updater reads latest.json from the newest release.
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Fetch mpv
+        shell: bash
+        run: bash src-tauri/fetch-mpv.sh
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: npx @tauri-apps/cli@2
+          tagName: ${{ github.ref_name }}
+          releaseName: Marquee ${{ github.ref_name }}
+          releaseBody: Download the -setup.exe below. Windows may warn "Windows protected your PC" — click More info → Run anyway.
+          releaseDraft: false

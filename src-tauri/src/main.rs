@@ -243,6 +243,16 @@ async fn discord_set(discord: State<'_, DiscordState>, app_id: String, details: 
     Ok(())
 }
 
+fn mpv_log_path() -> PathBuf { std::env::temp_dir().join("marquee-mpv.log") }
+
+/// Last `lines` lines of the last play's mpv log, for Send diagnostics. Empty if nothing has played yet.
+#[tauri::command]
+fn mpv_log(lines: usize) -> String {
+    let text = std::fs::read_to_string(mpv_log_path()).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
+
 #[tauri::command]
 async fn discord_clear(discord: State<'_, DiscordState>) -> Result<(), String> {
     let mut lock = discord.0.lock().map_err(|_| "poisoned")?;
@@ -264,6 +274,7 @@ fn spawn_mpv(pipe: &str, url: &str, title: &str, start: f64, headers: &[String],
         .arg(format!("--start={start}"))
         .arg(format!("--force-media-title={title}"))
         .arg("--force-window=immediate")
+        .arg(format!("--log-file={}", mpv_log_path().display())) // overwritten each play; read by Send diagnostics
         .creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no stray console behind the player
     for h in headers {
         cmd.arg(format!("--http-header-fields-append={h}")); // -append takes one item, so commas in values are safe
@@ -368,7 +379,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe, check_update, notify, discord_set, discord_clear])
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log])
         .run(tauri::generate_context!())
         .expect("error while running Marquee");
 }

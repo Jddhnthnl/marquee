@@ -25,6 +25,19 @@ service cloud.firestore {
       allow delete: if admin() && e != email(); // the admin can't lock themselves out
     }
 
+    // reports/<auto id>: Send diagnostics. Write-once from any friend, sized so one report can't fill the quota.
+    match /reports/{id} {
+      allow create: if invited()
+        && request.resource.data.keys().hasOnly(['v', 'at', 'note', 'url', 'log', 'from'])
+        && request.resource.data.from == email()
+        && request.resource.data.v is string && request.resource.data.v.size() <= 20
+        && request.resource.data.at is int
+        && request.resource.data.note is string && request.resource.data.note.size() <= 500
+        && request.resource.data.url is string && request.resource.data.url.size() <= 2000
+        && request.resource.data.log is string && request.resource.data.log.size() <= 90000;
+      allow list, get, delete: if admin();
+    }
+
     match /admins/{uid} {
       allow get: if request.auth != null && request.auth.uid == uid;
     }

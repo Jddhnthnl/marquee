@@ -1,8 +1,17 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
-import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite } from './sync.js';
+import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
+import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
   accentFromHex, isUnreleased, needsMeta, continueRows } from './look.js';
+
+// Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
+for (const level of ['warn', 'error']) {
+  const out = console[level].bind(console);
+  console[level] = (...a) => { logLine(level, a); out(...a); };
+}
+addEventListener('error', (e) => logLine('error', [e.error ?? e.message]));
+addEventListener('unhandledrejection', (e) => logLine('error', ['unhandled:', e.reason]));
 
 const DEFAULT_ADDONS = ['https://v3-cinemeta.strem.io/manifest.json']; // catalogs + meta, no keys
 const $ = (s) => document.querySelector(s);
@@ -514,6 +523,7 @@ function record(ctx, stream, posSec, durSec) {
 // Desktop app (Tauri): mpv plays inside Marquee's window with player.html as the controls, like Nuvio; resume comes back when mpv closes.
 let shelf = null;   // { meta, type, groups } from the last streams() call
 let playing = null; // { meta, type, ctx, stream, groups } while mpv is open; ctx/stream change when you switch episode or source
+let lastHref = ''; // the last link handed to mpv, for Send diagnostics
 const tauri = window.__TAURI__;
 const resumeAt = (p) => (p && p.positionMs / p.durationMs < 0.95 ? p.positionMs / 1000 : 0);
 const mediaTitle = (ctx) => ctx.name + (ctx.season ? ` ${epLabel(ctx.season, ctx.episode)}` : '');
@@ -522,6 +532,7 @@ const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
 
 async function playMpv(ctx, stream, href, saved, embed, quiet) {
   playing = { ...shelf, ctx, stream, segments: [], started: Math.floor(Date.now() / 1000) };
+  lastHref = href;
   const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
   let ok = false;
   try {
@@ -530,7 +541,10 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
     const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers, embed });
     ok = dur > 0;
     if (ok) record(playing.ctx, playing.stream, pos, dur);
-  } catch (e) { if (!quiet) alert(e); }
+  } catch (e) {
+    logLine('error', ['play failed:', String(e)]);
+    if (!quiet) reportDialog({ url: href, error: String(e) });
+  }
   const pick = playing.pickEpisode;
   playing = null;
   tauri.core.invoke('discord_clear').catch(() => {});
@@ -821,7 +835,9 @@ const sections = (set) => [
     + setRow('New episode alerts', `${sw('alerts', set.alerts)}<button class="btn quiet" id="alert-test">Send a test</button>`,
       'While Marquee is open it checks the series in your library every 3 hours and tells you when a new episode is out.')
     + setRow('Sort library by', pills('librarySort', [['added', 'Recently added'], ['title', 'Title'], ['released', 'Release year']], set.librarySort))
-    + '<div id="invites"></div>'), // filled in for the admin only
+    + setRow('Diagnostics', '<button class="btn quiet" id="diag">Send diagnostics</button>',
+      'When something won’t play or looks wrong, this sends the details to the person who invited you.')
+    + '<div id="invites"></div><div id="reports"></div>'), // filled in for the admin only
 ];
 
 let spy = null;
@@ -836,7 +852,8 @@ function settingsView() {
   const typed = (name, value) => (typeof { ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS }[name] === 'number' ? +value : value);
   const value = (r) => (r.closest('[data-multi]') ? [...r.closest('[data-multi]').querySelectorAll('input:checked')].map((i) => i.value)
     : r.type === 'checkbox' ? r.checked : typed(r.name, r.value));
-  wireProfile(); wireLists(); wireInvites();
+  wireProfile(); wireLists(); wireInvites(); wireReports();
+  $('#diag').onclick = () => reportDialog();
   app.querySelectorAll('[data-sec]:not([data-sec=profile]) :is(input, select)[name]').forEach((r) => {
     r.oninput = () => { // preview and readouts follow the slider; the profile is saved once you let go
       if (FMT[r.name]) $(`#${r.name}-v`).textContent = FMT[r.name](+r.value);
@@ -969,6 +986,29 @@ function wireLists() {
     }));
   });
 }
+// Admin only: diagnostics friends sent, newest first. The rules refuse everyone else.
+async function wireReports() {
+  const box = $('#reports');
+  if (!box || !(await isAdmin())) return;
+  const draw = async (msg = '') => {
+    let list;
+    try { list = await reports(); } catch { list = null; }
+    if (!box.isConnected) return;
+    box.innerHTML = setRow('Reports', !list ? '<p class="error">Couldn’t load reports. Check your internet connection.</p>'
+      : !list.length ? '<p class="hint">No reports. When a friend sends diagnostics, it shows up here.</p>'
+      : `<ul class="reports">${list.map((r) => `<li data-id="${esc(r.id)}"><details><summary><b>${esc(r.from)}</b> <span class="hint">${esc(new Date(r.at).toLocaleString())}, Marquee ${esc(r.v)}</span></summary>
+          ${r.note ? `<p>${esc(r.note)}</p>` : ''}${r.url ? `<p class="hint rep-url">${esc(r.url)}</p>` : ''}
+          <pre tabindex="0" aria-label="Log">${esc(r.log) || 'No log lines.'}</pre>
+          <button class="btn quiet danger" data-del>Delete</button></details></li>`).join('')}</ul>`)
+      + `<p class="hint" role="status">${esc(msg)}</p>`;
+    box.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
+      b.disabled = true;
+      try { await deleteReport(b.closest('li').dataset.id); await draw('Report deleted.'); }
+      catch { b.disabled = false; await draw('That report wasn’t deleted. Check your internet connection and try again.'); }
+    }));
+  };
+  draw();
+}
 // Admin only: who may make an account. The rules refuse everyone else, so for them the box just stays empty.
 async function wireInvites() {
   const box = $('#invites');
@@ -1039,7 +1079,8 @@ async function route() {
     return home();
   };
   // The callback must not return the view's promise: the transition would freeze the screen until the network answers.
-  if (document.startViewTransition && !calm.matches) document.startViewTransition(() => { go(); });
+  // a skipped transition (window minimised) still runs go(); only its unused `ready` rejects
+  if (document.startViewTransition && !calm.matches) document.startViewTransition(() => { go(); }).ready.catch(() => {});
   else go();
 }
 addEventListener('hashchange', () => account && route());
@@ -1145,6 +1186,41 @@ function resumeOffer() {
   document.body.append(d);
   d.showModal();
 }
+// Send diagnostics: from Settings > System, or offered when a play fails (failed = { url, error }).
+function reportDialog(failed) {
+  const d = document.createElement('dialog');
+  d.className = 'resume report';
+  d.setAttribute('aria-labelledby', 'rep-h');
+  d.innerHTML = `<h2 id="rep-h">${failed ? 'That didn’t play' : 'Send diagnostics'}</h2>
+    ${failed ? `<p class="error">${esc(failed.error)}</p>` : ''}
+    <p class="hint">A report holds the player’s log from the last play, Marquee’s recent errors and the stream link, with debrid keys removed. Only the person who invited you can read it.</p>
+    <form method="dialog"><label class="rep-note">What happened? <span class="hint">Optional</span>
+      <textarea class="lang" maxlength="${MAX_NOTE}" rows="4" placeholder="It stopped at the intro, the sound was out of sync…"></textarea></label>
+      <p class="hint" role="status" id="rep-msg"></p>
+      <p><button class="btn primary" value="send">Send report</button> <button class="btn quiet" value="">${failed ? 'Close' : 'Cancel'}</button></p></form>`;
+  const form = d.querySelector('form'), msg = d.querySelector('#rep-msg'), send = d.querySelector('[value=send]');
+  form.onsubmit = async (e) => {
+    if (e.submitter?.value !== 'send') return; // Close/Cancel: let the dialog close
+    e.preventDefault();
+    if (!account) { msg.textContent = 'Sign in first: reports go to your Marquee account.'; return; }
+    send.disabled = true; msg.textContent = 'Sending…';
+    try {
+      const [mpv, version] = tauri ? await Promise.all([tauri.core.invoke('mpv_log', { lines: MAX_LINES }).catch(() => ''), tauri.app.getVersion().catch(() => '')]) : ['', 'web'];
+      await sendReport(buildReport({ version, note: d.querySelector('textarea').value, url: failed?.url ?? lastHref, app: appLines(), mpv }));
+      msg.textContent = 'Report sent. Thanks.';
+      send.remove();
+      d.querySelector('[value=""]').textContent = 'Close';
+    } catch (err) {
+      send.disabled = false;
+      msg.textContent = `The report didn’t go through (${err.code ?? err.message}). Check your internet connection and try again.`;
+    }
+  };
+  d.onclose = () => d.remove();
+  document.body.append(d);
+  d.showModal();
+  d.querySelector('textarea').focus();
+}
+
 // New episode alerts: only while Marquee is open, at launch and every 3 hours, for series in the library.
 async function notify(title, body) {
   if (tauri) return tauri.core.invoke('notify', { title, body }).catch(() => {});

@@ -5,7 +5,7 @@
   "version": "0.7.2",
   "identifier": "dev.marquee.app",
   "build": {
-    "frontendDist": ["../index.html", "../player.html","../app.js", "../protocol.js", "../sync.js", "../playback.js", "../look.js", "../icon.svg", "../icon-512.png", "../manifest.webmanifest", "../sw.js"]
+    "frontendDist": ["../index.html", "../player.html","../app.js", "../protocol.js", "../sync.js", "../playback.js", "../look.js", "../diag.js", "../icon.svg", "../icon-512.png", "../manifest.webmanifest", "../sw.js"]
   },
   "app": {
     "withGlobalTauri": true,

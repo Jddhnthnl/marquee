@@ -2,7 +2,7 @@
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, addDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // Web config only names the project; it is public by design.
 const fb = initializeApp({
@@ -173,3 +173,8 @@ export const isAdmin = () => (uid ? getDoc(doc(db, 'admins', uid)).then((d) => d
 export const invites = async () => (await getDocsFromServer(collection(db, 'allowlist'))).docs.map((d) => d.id).sort();
 export const invite = (email) => setDoc(doc(db, 'allowlist', email.trim().toLowerCase()), { added: Date.now() });
 export const uninvite = (email) => deleteDoc(doc(db, 'allowlist', email));
+
+// Diagnostics: reports/<auto id> = buildReport() + from. Any invited account sends; only the admin lists and deletes.
+export const sendReport = (r) => addDoc(collection(db, 'reports'), { ...r, from: auth.currentUser?.email?.toLowerCase() ?? '' });
+export const reports = async () => (await getDocsFromServer(collection(db, 'reports'))).docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.at - a.at);
+export const deleteReport = (id) => deleteDoc(doc(db, 'reports', id));

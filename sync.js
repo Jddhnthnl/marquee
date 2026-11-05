@@ -15,7 +15,7 @@ const auth = getAuth(fb);
 const db = getFirestore(fb);
 
 // Player fit/volume stay per device on purpose.
-export const SYNCED = /^(profiles|autoplay_prefs|(installed_addon_urls|addon_enabled_states|library|watch_progress|settings)_\w+)$/;
+export const SYNCED = /^(profiles|autoplay_prefs|(installed_addon_urls|addon_enabled_states|library|watch_progress|settings|history_\d{4})_\w+)$/;
 const stamps = () => JSON.parse(localStorage.getItem('sync_stamps') || '{}');
 const stamp = (k, t) => localStorage.setItem('sync_stamps', JSON.stringify({ ...stamps(), [k]: t }));
 const syncedKeys = () => Object.keys(localStorage).filter((k) => SYNCED.test(k));

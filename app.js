@@ -1,5 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip } from './playback.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes } from './playback.js';
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
@@ -501,12 +501,13 @@ function play(ctx, stream, quiet = false) {
     <p id="pstatus"><b>${esc(ctx.name)}</b>${ctx.season ? ` ${epLabel(ctx.season, ctx.episode)}` : ''}</p></div>`;
   document.body.append(ov);
   const v = ov.querySelector('video');
-  let last = 0;
+  let last = 0, from = 0;
+  const since = Date.now();
   const persist = () => { if (v.duration && isFinite(v.duration)) record(ctx, stream, v.currentTime, v.duration); };
-  const close = () => { persist(); ov.remove(); removeEventListener('keydown', onKey); };
+  const close = () => { persist(); logSession(ctx, from, v.currentTime, since); ov.remove(); removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   addEventListener('keydown', onKey);
-  v.onloadedmetadata = () => { if (saved && saved.positionMs / saved.durationMs < 0.95) v.currentTime = saved.positionMs / 1000; };
+  v.onloadedmetadata = () => { from = v.currentTime = resumeAt(saved); };
   v.ontimeupdate = () => { if (Date.now() - last > 5000) { last = Date.now(); persist(); } };
   v.onpause = persist;
   v.onerror = () => ($('#pstatus').textContent = 'Your browser can’t play this file (usually MKV or HEVC). Copy the stream link and open it in mpv or VLC.');
@@ -520,6 +521,15 @@ function record(ctx, stream, posSec, durSec) {
   save(pk('watch_progress'), { ...progress(), [ctx.videoId]: { ...ctx, positionMs: posSec * 1000, durationMs: durSec * 1000, bingeGroup: stream.behaviorHints?.bingeGroup ?? null, stream, updatedAt: Date.now() } });
 }
 
+// Viewing history for the yearly recap: history_<year>_<pid>, one entry per play session of 2+ minutes, synced.
+// shortcut: last write wins per year list, so two PCs playing offline at the same time keep one PC's new entries; merge lists in sync.js if that bites.
+function logSession(ctx, fromSec, toSec, sinceMs) {
+  const minutes = sessionMinutes(fromSec, toSec, (Date.now() - sinceMs) / 1000);
+  if (!minutes) return;
+  const d = new Date(sinceMs), k = pk(`history_${d.getFullYear()}`);
+  save(k, [...load(k, []), { day: d.toLocaleDateString('en-CA'), id: ctx.metaId, videoId: ctx.videoId, minutes }]);
+}
+
 // Desktop app (Tauri): mpv plays inside Marquee's window with player.html as the controls, like Nuvio; resume comes back when mpv closes.
 let shelf = null;   // { meta, type, groups } from the last streams() call
 let playing = null; // { meta, type, ctx, stream, groups } while mpv is open; ctx/stream change when you switch episode or source
@@ -531,7 +541,7 @@ const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
   .sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
 
 async function playMpv(ctx, stream, href, saved, embed, quiet) {
-  playing = { ...shelf, ctx, stream, segments: [], started: Math.floor(Date.now() / 1000) };
+  playing = { ...shelf, ctx, stream, segments: [], started: Math.floor(Date.now() / 1000), from: resumeAt(saved), since: Date.now() };
   lastHref = href;
   const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
   let ok = false;
@@ -540,7 +550,7 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
     loadSegments(ctx);
     const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers, embed });
     ok = dur > 0;
-    if (ok) record(playing.ctx, playing.stream, pos, dur);
+    if (ok) { record(playing.ctx, playing.stream, pos, dur); logSession(playing.ctx, playing.from, pos, playing.since); }
   } catch (e) {
     logLine('error', ['play failed:', String(e)]);
     if (!quiet) reportDialog({ url: href, error: String(e) });
@@ -635,6 +645,10 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     // %bytes%text quoting so commas in the title can't break mpv's option list. shortcut: proxy headers aren't re-sent on a switch; add http-header-fields here if an addon needs them
     const opts = `start=${start},force-media-title=%${new TextEncoder().encode(title).length}%${title}`;
     await tauri.core.invoke('mpv_cmd', { args: ['loadfile', t.href, 'replace', -1, opts] });
+    if (ctx.videoId !== playing.ctx.videoId) { // another episode: the old one's session ends where snap (taken above) saw it
+      logSession(playing.ctx, playing.from, snap['time-pos'] ?? 0, playing.since);
+      Object.assign(playing, { from: start, since: Date.now() });
+    }
     Object.assign(playing, { ctx, stream: s, groups, segments: [], started: Math.floor(Date.now() / 1000) });
     notify(`Playing ${title}`);
     sendPlayerInfo();

@@ -108,6 +108,13 @@ export function nextCardAt(segs, duration, when = 'credits') {
   return outro ? outro.start : Math.max(duration / 2, duration - 30);
 }
 
+// Minutes watched in one play session for the history log: how far playback moved, capped by the time the player was open,
+// so pauses and skips forward don't count. 0 under 2 minutes (not logged).
+export function sessionMinutes(fromSec, toSec, openSec) {
+  const sec = Math.min(toSec - fromSec, openSec);
+  return sec >= 120 ? Math.round(sec / 60) : 0;
+}
+
 // Chapter names inside the file; a chapter runs until the next one (the last until the end).
 const CHAPTER = [[/recap|previously/i, 'recap'], [/intro|opening|^op$/i, 'intro'], [/credits|ending|outro|^ed$/i, 'outro']];
 export const fromChapters = (list, duration) => (list ?? []).flatMap((c, i) => {

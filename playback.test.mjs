@@ -1,6 +1,6 @@
 // node playback.test.mjs
 import assert from 'node:assert/strict';
-import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt } from './playback.js';
+import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes } from './playback.js';
 
 const s = (name, url, bingeGroup) => ({ name, url, behaviorHints: bingeGroup ? { bingeGroup } : {} });
 const groups = [{ addonName: 'A', streams: [s('720p WEB', 'u720'), s('1080p WEB', 'u1080', 'grp'), s('2160p 4K', 'u2160')] }];
@@ -102,3 +102,10 @@ assert.deepEqual(videoProps({ ...PLAYBACK_DEFAULTS, brightness: 10, saturation: 
   [['brightness', 10], ['contrast', 0], ['saturation', -5], ['gamma', 0], ['deband', true]]);
 
 console.log('playback tests pass');
+
+// history: minutes watched per session
+assert.equal(sessionMinutes(0, 1500, 1500), 25, 'played straight through');
+assert.equal(sessionMinutes(600, 900, 3600), 5, 'paused for most of an hour: only playback counts');
+assert.equal(sessionMinutes(0, 3000, 300), 5, 'skipped ahead: capped by time open');
+assert.equal(sessionMinutes(0, 100, 100), 0, 'under 2 minutes is not logged');
+assert.equal(sessionMinutes(900, 300, 600), 0, 'seeked backwards');

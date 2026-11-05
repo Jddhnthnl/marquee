@@ -67,7 +67,12 @@ export const RULES = {
   english: ['English audio', 'english|\\beng\\b'],
   nocam: ['No CAM or TS', '\\b(cam|hdcam|camrip|ts|hdts|telesync|tc|telecine)\\b', true],
   noremux: ['No Remux or HDR', 'remux|hdr|\\bdv\\b|dolby.?vision', true],
+  cached: ['Cached on debrid', '\\[\\w+ download\\]', true], // Torrentio: [TB+] cached, [TB download] not; hard filter in chooseStream
 };
+
+// Debrid health: the TorBox key sits in the installed Torrentio link (…|torbox=KEY|…/manifest.json, | maybe %7C).
+export const torboxKey = (urls) => urls.map((u) => /(?:[/|]|%7C)torbox=([\w-]+)/i.exec(u)?.[1]).find(Boolean) ?? null;
+export const daysLeft = (iso, now = Date.now()) => (iso ? Math.ceil((Date.parse(iso) - now) / 864e5) : null);
 const re = (src) => { try { return src ? new RegExp(src, 'i') : null; } catch { return null; } }; // a broken custom rule is ignored
 const text = (s) => `${s.name ?? ''} ${s.title ?? ''} ${s.description ?? ''}`;
 
@@ -85,7 +90,8 @@ export function failedLabel(t, now = Date.now()) {
 export function chooseStream({ mode, quality, last, groups, bingeGroup = null, rules = [], custom = '', sameGroup = true, dead = {} }) {
   if (mode === 'ask') return null;
   if (mode === 'reuse' && last?.stream?.url && !deadAt(dead, last.stream)) return last.stream;
-  const all = groups.flatMap((g) => g.streams).filter((s) => s.url && !deadAt(dead, s)); // torrents and external links can't auto-play
+  const uncached = rules.includes('cached') && re(RULES.cached[1]); // hard, unlike other rules: an uncached pick makes the debrid download it
+  const all = groups.flatMap((g) => g.streams).filter((s) => s.url && !deadAt(dead, s) && !(uncached && uncached.test(text(s)))); // torrents and external links can't auto-play
   const same = sameGroup && bingeGroup && all.find((s) => s.behaviorHints?.bingeGroup === bingeGroup);
   if (same) return same;
   const tests = [...rules.filter((k) => RULES[k]).map((k) => [re(RULES[k][1]), RULES[k][2]]), [re(custom), false]].filter(([r]) => r);

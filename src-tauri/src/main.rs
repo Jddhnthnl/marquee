@@ -143,6 +143,14 @@ async fn introdb(imdb: String, season: u32, episode: u32) -> Result<Value, Strin
     r.json().await.map_err(|e| e.to_string())
 }
 
+/// TorBox account (plan, expiry) for debrid health. Done here because TorBox's CORS rejects the app's origin.
+#[tauri::command]
+async fn torbox_me(key: String) -> Result<Value, String> {
+    let r = reqwest::Client::new().get("https://api.torbox.app/v1/api/user/me").bearer_auth(key)
+        .timeout(Duration::from_secs(8)).send().await.map_err(|e| e.to_string())?;
+    r.json().await.map_err(|e| e.to_string())
+}
+
 /// "Another app" player: hand the link to the .exe the user picked.
 #[tauri::command]
 fn open_external(path: String, url: String) -> Result<(), String> {
@@ -383,7 +391,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log])
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, torbox_me, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log])
         .run(tauri::generate_context!())
         .expect("error while running Marquee");
 }

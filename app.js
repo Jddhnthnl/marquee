@@ -1,5 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow } from './playback.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft } from './playback.js';
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
@@ -927,6 +927,7 @@ const sections = (set) => [
     + switchRow('resumePrompt', 'Offer to resume at launch', set.resumePrompt, 'When Marquee opens, it asks whether to carry on with what you watched last.')),
   sec('system', setRow('Updates', `${pills('updateChannel', [['stable', 'Stable'], ['beta', 'Beta']], set.updateChannel)}<p class="hint"><button class="btn quiet" id="upd">Check for updates</button> <span id="upd-msg" role="status"></span></p>`,
       'Beta gets new features first and can have rough edges.')
+    + (torboxKey(addonUrls()) ? setRow('TorBox', '<p id="tb-msg" role="status">Checking…</p>', 'Read from your Torrentio addon link. Marquee warns you 7 days before the plan ends.') : '')
     + switchRow('rememberProfile', 'Skip “Who’s watching?”', set.rememberProfile, 'Opens straight into the profile you used last.')
     + setRow('Discord status', sw('discord', set.discord) + (set.discord ? field('discordId', set.discordId, 'Application ID', 'Discord application ID') : ''),
       'Shows what you’re watching on your Discord profile. Needs the Discord app running and an application ID from discord.com/developers.')
@@ -983,6 +984,7 @@ function settingsView() {
     try { const v = await tauri.core.invoke('check_update', { channel: settings().updateChannel }); msg.textContent = v ? `Marquee ${v} is out. Choose Update now in the prompt to install it.` : 'You have the latest version.'; }
     catch (e) { msg.textContent = `Couldn’t check (${e}). Try again later.`; }
   };
+  if ($('#tb-msg')) torbox().then((me) => { if ($('#tb-msg')) $('#tb-msg').textContent = me ? tbLine(me) : 'Couldn’t reach TorBox, or the key in your Torrentio link isn’t valid.'; });
   $('#alert-test').onclick = () => notify('New episode alerts are on', 'Marquee tells you here when a series in your library gets a new episode.');
   app.querySelectorAll('[data-jump]').forEach((b) => (b.onclick = () => document.getElementById(b.dataset.jump).scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth' })));
   // the index lights the bulb of the section you're reading
@@ -1251,7 +1253,7 @@ watch(
     launched = true;
     if (first && profiles().list.length > 1 && !settings().rememberProfile && location.hash !== '#/profiles') location.hash = '#/profiles'; // hashchange routes
     else { route(); if (first) setTimeout(resumeOffer, settings().intro && !calm.matches ? 2600 : 600); }
-    if (first) checkAlerts();
+    if (first) { checkAlerts(); checkDebrid(); }
   },
   (code) => { account = null; loginView(code); },
 );
@@ -1317,6 +1319,24 @@ function reportDialog(failed) {
   document.body.append(d);
   d.showModal();
   d.querySelector('textarea').focus();
+}
+
+// Debrid health: TorBox account from the key in the profile's Torrentio link. null = no key, offline or bad key.
+async function torbox() {
+  const key = torboxKey(addonUrls());
+  if (!key || !tauri) return null;
+  return (await tauri.core.invoke('torbox_me', { key }).catch(() => null))?.data ?? null;
+}
+const TB_PLANS = ['Free', 'Essential', 'Pro', 'Standard']; // shortcut: TorBox's plan ids as of 2026-11, unknown ids show as "TorBox"
+const tbLine = (me) => `${TB_PLANS[me.plan] ?? 'TorBox'} plan${me.premium_expires_at ? `, ${daysLeft(me.premium_expires_at) < 0 ? 'ended' : 'renews or ends'} ${new Date(me.premium_expires_at).toLocaleDateString()}` : ''}`;
+async function checkDebrid() { // at launch, once a day per PC, from 7 days before the plan ends
+  const today = new Date().toDateString();
+  if (localStorage.getItem('debrid_warned') === today) return;
+  const me = await torbox(), d = me && daysLeft(me.premium_expires_at);
+  if (d == null || d > 7) return;
+  localStorage.setItem('debrid_warned', today); // this PC only: never synced
+  notify(d < 0 ? 'Your TorBox plan has ended' : `Your TorBox plan ends in ${d} day${d === 1 ? '' : 's'}`,
+    'Debrid links stop playing when it ends. Renew at torbox.app.');
 }
 
 // New episode alerts: only while Marquee is open, at launch and every 3 hours, for series in the library.

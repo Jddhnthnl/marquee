@@ -1,6 +1,6 @@
 // node playback.test.mjs
 import assert from 'node:assert/strict';
-import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes, deadAt, failedLabel, DEAD_MS, releaseKey, withShow, langKey } from './playback.js';
+import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes, deadAt, failedLabel, DEAD_MS, releaseKey, withShow, langKey, torboxKey, daysLeft } from './playback.js';
 
 const s = (name, url, bingeGroup) => ({ name, url, behaviorHints: bingeGroup ? { bingeGroup } : {} });
 const groups = [{ addonName: 'A', streams: [s('720p WEB', 'u720'), s('1080p WEB', 'u1080', 'grp'), s('2160p 4K', 'u2160')] }];
@@ -133,3 +133,16 @@ assert.equal(sessionMinutes(600, 900, 3600), 5, 'paused for most of an hour: onl
 assert.equal(sessionMinutes(0, 3000, 300), 5, 'skipped ahead: capped by time open');
 assert.equal(sessionMinutes(0, 100, 100), 0, 'under 2 minutes is not logged');
 assert.equal(sessionMinutes(900, 300, 600), 0, 'seeked backwards');
+
+// debrid health
+const tb = [s('[TB download] Torrentio\n2160p', 'uDl'), s('[TB+] Torrentio\n1080p', 'uTb', 'tb')];
+assert.equal(chooseStream({ mode: 'auto', quality: '2160p', groups: [{ streams: tb }], rules: ['cached'] }).url, 'uTb', 'cached rule skips an uncached link even at the wanted quality');
+assert.equal(chooseStream({ mode: 'auto', quality: '2160p', groups: [{ streams: [tb[0]] }], rules: ['cached'] }), null, 'cached rule is hard: no fallback to uncached');
+assert.equal(chooseStream({ mode: 'auto', quality: '2160p', groups: [{ streams: [tb[0]] }], bingeGroup: null, rules: [] }).url, 'uDl', 'without the rule uncached still plays');
+assert.equal(chooseStream({ mode: 'auto', quality: '720p', groups, rules: ['cached'] }).url, 'u720', 'plain links from other addons still pass');
+assert.equal(torboxKey(['https://v3-cinemeta.strem.io/manifest.json', 'https://torrentio.strem.fun/providers=yts|torbox=ab-12cd/manifest.json']), 'ab-12cd', 'key from Torrentio config');
+assert.equal(torboxKey(['https://torrentio.strem.fun/sort=size%7Ctorbox=KEY9/manifest.json']), 'KEY9', 'encoded pipe');
+assert.equal(torboxKey(['https://torrentio.strem.fun/manifest.json']), null, 'no debrid configured');
+assert.equal(daysLeft('2026-11-12T00:00:00Z', Date.parse('2026-11-05T12:00:00Z')), 7, 'partial days round up');
+assert.ok(daysLeft('2026-11-01T00:00:00Z', Date.parse('2026-11-05T00:00:00Z')) < 0, 'expired is negative');
+assert.equal(daysLeft(null), null, 'free plan has no expiry');

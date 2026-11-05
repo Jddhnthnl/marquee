@@ -2,7 +2,8 @@
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut, EmailAuthProvider, reauthenticateWithCredential } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, addDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, addDoc, deleteDoc, onSnapshot, updateDoc, deleteField } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
+import { partyCode, partyStale } from './playback.js';
 
 // Web config only names the project; it is public by design.
 const fb = initializeApp({
@@ -202,3 +203,30 @@ export async function shareFinished(item) { // newest first, one entry per title
   const ref = doc(db, 'activity', uid), items = (await getDoc(ref)).data()?.items ?? [];
   await setDoc(ref, { items: [item, ...items.filter((x) => x.id !== item.id)].slice(0, 20) });
 }
+
+// Watch party: parties/<CODE> = { type, metaId, videoId, playing, pos, at, by, members: { <uid>: { name, color, buffering } } }.
+const partyRef = (code) => doc(db, 'parties', code);
+export const myUid = () => uid;
+export async function startParty(state, member) { // a code is reused only once its party is gone or stale
+  for (let i = 0; i < 8; i++) {
+    const code = partyCode(), old = await getDoc(partyRef(code));
+    if (old.exists() && !partyStale(old.data())) continue;
+    await setDoc(partyRef(code), { ...state, at: Date.now(), by: uid, members: { [uid]: member } });
+    return code;
+  }
+  throw new Error('no free party code');
+}
+export async function joinParty(code, member) { // null: no such party, or it went quiet 6 hours ago
+  const d = await getDoc(partyRef(code));
+  if (!d.exists() || partyStale(d.data())) return null;
+  await updateDoc(partyRef(code), { [`members.${uid}`]: member });
+  return d.data();
+}
+export const setParty = (code, patch) => updateDoc(partyRef(code), { ...patch, at: Date.now(), by: uid });
+export const setPartyMember = (code, key, value) => updateDoc(partyRef(code), { [`members.${uid}.${key}`]: value });
+export async function leaveParty(code) {
+  await updateDoc(partyRef(code), { [`members.${uid}`]: deleteField() });
+  const d = await getDoc(partyRef(code)); // last one out deletes it
+  if (d.exists() && !Object.keys(d.data().members ?? {}).length) await deleteDoc(partyRef(code));
+}
+export const watchParty = (code, onChange) => onSnapshot(partyRef(code), (d) => onChange(d.exists() ? d.data() : null), (e) => console.warn('party listen failed', e.code));

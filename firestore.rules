@@ -69,6 +69,19 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['items']) && request.resource.data.items is list && request.resource.data.items.size() <= 20;
     }
 
+    // parties/<CODE>: Watch together. Any friend reads and steers it (equal control by design); the code is 4 letters without I/O.
+    match /parties/{code} {
+      function party() {
+        let p = request.resource.data;
+        return p.keys().hasOnly(['type', 'metaId', 'videoId', 'playing', 'pos', 'at', 'by', 'members'])
+          && p.type is string && p.type.size() <= 20 && p.metaId is string && p.metaId.size() <= 200 && p.videoId is string && p.videoId.size() <= 200
+          && p.playing is bool && p.pos is number && p.at is int && p.by is string && p.members is map && p.members.size() <= 12;
+      }
+      allow read, delete: if invited();
+      allow create: if invited() && code.matches('[A-HJ-NP-Z]{4}') && party();
+      allow update: if invited() && party();
+    }
+
     match /admins/{uid} {
       allow get: if request.auth != null && request.auth.uid == uid;
     }

@@ -153,3 +153,27 @@ export const fromChapters = (list, duration) => (list ?? []).flatMap((c, i) => {
   const kind = CHAPTER.find(([re]) => re.test(c.title ?? ''))?.[1];
   return kind ? [{ kind, start: c.time, end: list[i + 1]?.time ?? duration }] : [];
 });
+
+// Watch party: parties/<CODE> holds where playback was ({ playing, pos }) at time `at` and who wrote it (`by`).
+// Codes are 4 letters without I and O, so they read aloud without mix-ups. A party nobody touched for 6 hours is over.
+export const PARTY_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+export const PARTY_STALE = 6 * 36e5;
+export const PARTY_DRIFT = 3; // seconds off before a seek: smaller corrections stutter on slow-to-seek debrid links
+export const partyCode = (rand = Math.random) => Array.from({ length: 4 }, () => PARTY_LETTERS[Math.floor(rand() * PARTY_LETTERS.length)]).join('');
+export const partyStale = (p, now = Date.now()) => !p || now - p.at > PARTY_STALE;
+// shortcut: uses each PC's own clock for `at`, so clocks more than a second apart show up as drift; switch to serverTimestamp if friends see constant re-seeks
+export const partyPos = (p, now = Date.now()) => p.pos + (p.playing ? Math.max(0, now - p.at) / 1000 : 0);
+const hms = (t) => { t = Math.max(0, Math.round(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = String(t % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`; };
+// Notices for what someone else changed between two versions of the party doc ("Sam paused", "Alex joined").
+export function partyNews(a, b, me) {
+  if (!a || !b) return [];
+  const am = a.members ?? {}, bm = b.members ?? {}, who = (u) => bm[u]?.name ?? am[u]?.name ?? 'Someone', out = [];
+  for (const u of Object.keys(bm)) if (u !== me && !am[u]) out.push(`${who(u)} joined`);
+  for (const u of Object.keys(am)) if (u !== me && !bm[u]) out.push(`${who(u)} left`);
+  for (const u of Object.keys(bm)) if (u !== me && am[u] && bm[u].buffering && !am[u].buffering) out.push(`${who(u)} is buffering`);
+  if (b.by !== me && b.at !== a.at && b.videoId === a.videoId) {
+    if (a.playing !== b.playing) out.push(`${who(b.by)} ${b.playing ? 'pressed play' : 'paused'}`);
+    else if (Math.abs(partyPos(a, b.at) - b.pos) > PARTY_DRIFT) out.push(`${who(b.by)} jumped to ${hms(b.pos)}`);
+  }
+  return out;
+}

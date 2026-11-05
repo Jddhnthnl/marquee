@@ -1,6 +1,6 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft } from './playback.js';
-import { push, drop, watch, signIn, signUp, resetPassword, checkPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft, partyPos, partyNews, PARTY_DRIFT } from './playback.js';
+import { push, drop, watch, signIn, signUp, resetPassword, checkPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished, myUid, startParty, joinParty, setParty, setPartyMember, leaveParty, watchParty } from './sync.js';
 import { deviceCode, deviceLink, sync as traktPull, addHistory, revoke } from './trakt.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
@@ -351,7 +351,7 @@ async function details(type, id, pickVid) {
   const tid = ytId(meta), set = settings();
   document.body.dataset.bg = set.detailBg === 'normal' ? '' : 'cinematic';
   if (set.detailBg === 'color' && meta.poster) tint(meta.poster, meta.id);
-  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>${account ? '<button class="btn" id="send">Send to a friend</button>' : ''}` })}</section>
+  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>${account ? '<button class="btn" id="send">Send to a friend</button>' : ''}${tauri && account ? '<button class="btn" id="together">Watch together</button>' : ''}` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${esc(s)}">Season ${esc(s)}</button>`).join('')}</div>
         <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button>${tauri ? '<button class="btn quiet" id="dlseason">Download season</button>' : ''}</p><ol class="ep-list" id="eps"></ol>
@@ -369,6 +369,7 @@ async function details(type, id, pickVid) {
     details(type, id, pickVid); // stay on the episode you were looking at
   };
   if ($('#send')) $('#send').onclick = () => sendDialog(meta, type);
+  if ($('#together')) $('#together').onclick = () => watchTogether(meta, type, eps);
   if ($('#play')) $('#play').onclick = () => streams(meta, type, meta.id, undefined, true);
   if (!isSeries) return void streams(meta, type, meta.id, undefined, auto);
   let watched = progress(), shown = null;
@@ -646,6 +647,7 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
   const local = href !== stream.url ? stream : null; // a download: its file failing is no reason to mark the link dead
   playing = { ...shelf, ctx, stream, segments: [], started: Math.floor(Date.now() / 1000), from: resumeAt(saved), since: Date.now() };
   lastHref = href;
+  if (party) partyLoaded(ctx, resumeAt(saved));
   const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
   let ok = false;
   try {
@@ -662,6 +664,7 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
   }
   const pick = playing.pickEpisode;
   playing = null;
+  if (party && ok && !pick) leaveTogether(); // you closed the player (or it ended); "ask every time" closes it to pick, which isn't leaving
   tauri.core.invoke('discord_clear').catch(() => {});
   const h = pick && `#/meta/${pick.type}/${encodeURIComponent(pick.metaId)}/${encodeURIComponent(pick.videoId)}`;
   if (h && location.hash !== h) location.hash = h;
@@ -790,6 +793,7 @@ function sendPlayerInfo() {
       progress: seen[v.id] ? seen[v.id].positionMs / seen[v.id].durationMs : 0, current: v.id === ctx.videoId })),
     sources: groups.filter(Boolean).flatMap((g, gi) => g.streams.map((s, si) => ({ key: `${gi}:${si}`, addon: g.addonName,
       name: s.name || g.addonName, title: s.title || s.description || '', playable: streamTarget(s)?.kind === 'url', current: s === stream }))),
+    party: party && { code: party.code, members: Object.values(party.doc?.members ?? {}).map(({ name, color }) => ({ name, color })) },
   } });
 }
 
@@ -799,7 +803,8 @@ const streamGroups = async (type, id) => (await Promise.all(activeAddons().filte
   .filter(Boolean);
 
 // Requests from the player's Episodes and Sources panels
-tauri?.event.listen('player-request', async ({ payload: r }) => {
+tauri?.event.listen('player-request', ({ payload }) => onPlayerRequest(payload));
+async function onPlayerRequest(r) {
   if (!playing) return;
   const notify = (text) => tauri.event.emitTo('player', 'player-notice', text);
   if (r.type === 'settings') { // Style panel in the player: only subtitle keys, only the types the defaults have
@@ -820,6 +825,9 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     if (settings().streamMode !== 'ask' && playing.pre?.id !== r.id) playing.pre = { id: r.id, groups: streamGroups(playing.type, r.id) };
     return;
   }
+  if (r.type === 'party') return partyLocal();
+  if (r.type === 'party-buffer') return party && setPartyMember(party.code, 'buffering', !!r.on).catch(() => {});
+  if (r.type === 'party-leave') return leaveTogether();
   const snap = await tauri.core.invoke('mpv_state');
   if (!playing) return; // the player closed while we asked
   if (snap.duration > 0) record(playing.ctx, playing.stream, snap['time-pos'] ?? 0, snap.duration);
@@ -853,6 +861,10 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     if (!ep) return;
     const ctx = { ...playing.ctx, videoId: ep.id, season: ep.season, episode: ep.episode ?? ep.number };
     const set = settings();
+    const start = r.remote && party?.doc ? partyPos(party.doc) : resumeAt(progress()[ep.id]);
+    if (party && !r.remote) { party.switching = ep.id; setParty(party.code, { videoId: ep.id, pos: start, playing: true }).catch(() => {}); }
+    const dl = dlOf(ep.id);
+    if (dl?.state === 'done') return swap(ctx, dl.stream, [], start, undefined, dl.file); // a finished download plays first
     if (set.streamMode === 'ask') { // you choose: close the player and open that episode's streams
       playing.pickEpisode = { type, metaId: meta.id, videoId: ep.id };
       return tauri.core.invoke('mpv_cmd', { args: ['quit'] });
@@ -863,17 +875,22 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     // shortcut: a reused link that has died isn't detected mid-player (mpv just ends); the details page path does fall back
     const s = chooseStream({ mode: set.streamMode, quality: set.quality, last: progress()[ep.id], groups, bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null, ...pickRules(set) })
       ?? groups.flatMap((g) => g.streams).find((x) => streamTarget(x)?.kind === 'url');
+    if (!s && party) { // the party moved on without you: pick a stream from the list, you stay in the party
+      playing.pickEpisode = { type, metaId: meta.id, videoId: ep.id };
+      return tauri.core.invoke('mpv_cmd', { args: ['quit'] });
+    }
     if (!s) return notify(`No playable stream for ${epLabel(ctx.season, ctx.episode)}. Torrent-only results can't play here.`);
-    swap(ctx, s, groups, resumeAt(progress()[ep.id]));
+    swap(ctx, s, groups, start);
   }
 
-  async function swap(ctx, s, groups, start, say) {
+  async function swap(ctx, s, groups, start, say, file = null) {
     const t = streamTarget(s);
     if (t?.kind !== 'url') return notify('That source is a torrent or external link, so it can’t play here.');
+    if (party) partyLoaded(ctx, start);
     const title = mediaTitle(ctx);
     // %bytes%text quoting so commas in the title can't break mpv's option list. shortcut: proxy headers aren't re-sent on a switch; add http-header-fields here if an addon needs them
     const opts = `start=${start},force-media-title=%${new TextEncoder().encode(title).length}%${title}`;
-    await tauri.core.invoke('mpv_cmd', { args: ['loadfile', t.href, 'replace', -1, opts] });
+    await tauri.core.invoke('mpv_cmd', { args: ['loadfile', file ?? t.href, 'replace', -1, opts] });
     if (ctx.videoId !== playing.ctx.videoId) { // another episode: the old one's session ends where snap (taken above) saw it
       logSession(playing.ctx, playing.from, snap['time-pos'] ?? 0, playing.since);
       Object.assign(playing, { from: start, since: Date.now() });
@@ -883,7 +900,115 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     sendPlayerInfo();
     loadSegments(ctx);
   }
-});
+}
+
+// ---------- watch party (desktop app): parties/<CODE> in Firestore; everyone plays their own stream and follows the shared position ----------
+let party = null; // { code, doc, stop, timer, settled, switching } while you're in one
+const partyNotice = (text) => playing && tauri.event.emitTo('player', 'player-notice', text);
+const partyMember = () => { const p = me(); return { name: p?.name ?? 'Someone', color: p?.color ?? '' }; };
+const partyPath = (p) => `#/meta/${p.type}/${encodeURIComponent(p.metaId)}${p.videoId !== p.metaId ? `/${encodeURIComponent(p.videoId)}` : ''}`;
+function enterParty(code, doc = null) {
+  if (party) leaveTogether();
+  party = { code, doc, settled: false, switching: null, stop: watchParty(code, onParty), timer: setInterval(partyTick, 3000) };
+}
+async function leaveTogether() {
+  if (!party) return;
+  const { code, stop, timer } = party;
+  party = null;
+  stop(); clearInterval(timer);
+  if (playing) sendPlayerInfo();
+  await leaveParty(code).catch((e) => logLine('error', ['leave party:', String(e)]));
+}
+// Start: the episode you'd resume (or the next one if that's finished), so the code can go out while it loads.
+async function watchTogether(meta, type, eps) {
+  const prog = progress(), last = Object.values(prog).filter((p) => p.metaId === meta.id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  let v = eps.length && type !== 'movie' ? eps.find((e) => e.id === last?.videoId) ?? eps[0] : null;
+  if (v && finished(prog[v.id])) v = eps[eps.indexOf(v) + 1] ?? v;
+  const videoId = v?.id ?? meta.id, where = partyPath({ type, metaId: meta.id, videoId });
+  try {
+    const code = await startParty({ type, metaId: meta.id, videoId, playing: true, pos: resumeAt(prog[videoId]) }, partyMember());
+    enterParty(code);
+    if (location.hash === where) streams(meta, type, videoId, v ?? undefined, true);
+    else { autoStart = videoId; location.hash = where; }
+  } catch (e) { alert(`The party didn’t start (${e.code ?? e.message}). Check your internet connection and try again.`); }
+}
+function joinDialog() {
+  const d = document.createElement('dialog');
+  d.className = 'resume';
+  d.setAttribute('aria-labelledby', 'join-h');
+  d.innerHTML = `<h2 id="join-h">Join a party</h2><form method="dialog">
+    <label>Room code <input class="lang" name="code" maxlength="4" autocomplete="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:.3em" required></label>
+    <p class="hint" role="status" id="join-msg">Ask whoever started it for the 4-letter code.</p>
+    <p><button class="btn primary" value="join">Join</button> <button class="btn quiet" value="" formnovalidate>Cancel</button></p></form>`;
+  const msg = d.querySelector('#join-msg'), input = d.querySelector('input');
+  d.querySelector('form').onsubmit = async (e) => {
+    if (e.submitter?.value !== 'join') return;
+    e.preventDefault();
+    const code = input.value.trim().toUpperCase();
+    msg.textContent = 'Joining…';
+    try {
+      const p = await joinParty(code, partyMember());
+      if (!p) { msg.textContent = 'No party with that code. It may have ended.'; return; }
+      enterParty(code, p);
+      d.close();
+      autoStart = p.videoId; // details plays it; the first sync jumps you to where the others are
+      if (location.hash === partyPath(p)) route(); else location.hash = partyPath(p);
+    } catch (err) { msg.textContent = `Couldn’t join (${err.code ?? err.message}).`; }
+  };
+  d.onclose = () => d.remove();
+  document.body.append(d);
+  d.showModal();
+  input.focus();
+}
+// A file started (first play, another episode, a switched stream): line it up with the party before reporting from it.
+function partyLoaded(ctx, start) {
+  party.settled = false;
+  const d = party.doc;
+  if (d && d.metaId === ctx.metaId && d.videoId !== ctx.videoId && party.switching !== ctx.videoId) { // you picked another episode yourself
+    party.switching = ctx.videoId;
+    setParty(party.code, { videoId: ctx.videoId, pos: start, playing: true }).catch(() => {});
+  }
+}
+function onParty(d) {
+  if (!party) return;
+  const before = party.doc;
+  party.doc = d;
+  if (!d) { partyNotice('The party ended'); return leaveTogether(); }
+  if (!playing) return;
+  for (const t of partyNews(before, d, myUid())) partyNotice(t);
+  if (JSON.stringify(before?.members ?? {}) !== JSON.stringify(d.members ?? {})) sendPlayerInfo();
+  if (!before || d.at !== before.at) partyTick(); // apply now, not on the next tick
+}
+// Every 3 s and on each change: follow the party's episode, play/pause and position (if more than PARTY_DRIFT off).
+async function partyTick() {
+  const d = party?.doc;
+  if (!d || !playing || d.metaId !== playing.meta.id) return;
+  if (d.videoId !== playing.ctx.videoId) {
+    if (party.switching !== d.videoId) { party.switching = d.videoId; onPlayerRequest({ type: 'episode', id: d.videoId, remote: true }); }
+    return;
+  }
+  party.switching = null; // on the party's episode: a later change back to an earlier one must still be followed
+  const st = await tauri.core.invoke('mpv_state'); // keys start missing after each start-file: no pause = playing
+  if (!party || !playing || !(st.duration > 0) || st['paused-for-cache'] || st.seeking) return; // loading or buffering: don't pile seeks on
+  const pos = st['time-pos'] ?? 0;
+  if (!party.settled && Object.keys(d.members ?? {}).every((u) => u === myUid())) { // alone: where you are is where the party is
+    party.settled = true;
+    return void setParty(party.code, { playing: !st.pause, pos }).catch(() => {});
+  }
+  if (!!st.pause === d.playing) await tauri.core.invoke('mpv_cmd', { args: ['set_property', 'pause', !d.playing] }).catch(() => {});
+  const want = partyPos(d);
+  if (Math.abs(pos - want) > PARTY_DRIFT) await tauri.core.invoke('mpv_cmd', { args: ['seek', want, 'absolute'] }).catch(() => {});
+  else party.settled = true;
+}
+// You paused, played or seeked: tell the party, unless it's just the sync above landing (then it already matches).
+async function partyLocal() {
+  await new Promise((ok) => setTimeout(ok, 300)); // let the seek settle into time-pos
+  const d = party?.doc;
+  if (!d || !party.settled || !playing || d.videoId !== playing.ctx.videoId) return;
+  const st = await tauri.core.invoke('mpv_state'), pos = st['time-pos'] ?? 0;
+  if (party && (!!st.pause === d.playing || Math.abs(pos - partyPos(d)) > PARTY_DRIFT)) setParty(party.code, { playing: !st.pause, pos }).catch(() => {});
+}
+$('#joinp')?.addEventListener('click', (e) => { e.preventDefault(); joinDialog(); });
 
 async function addonsView() {
   const st = enabledStates();
@@ -1551,13 +1676,14 @@ tauri?.core.invoke('check_update', { channel: settings().updateChannel }).catch(
 watch(
   (user) => {
     account = user; document.body.classList.remove('gated'); manifests.clear();
+    if (tauri) $('#joinp').hidden = false;
     const first = !launched;
     launched = true;
     if (first && profiles().list.length > 1 && !settings().rememberProfile && location.hash !== '#/profiles') location.hash = '#/profiles'; // hashchange routes
     else { route(); if (first) setTimeout(resumeOffer, settings().intro && !calm.matches ? 2600 : 600); }
     if (first) { checkAlerts(); checkDebrid(); startFriends(user); traktSync(); }
   },
-  (code) => { account = null; stopInbox(); inbox = []; activity = []; activityAt = 0; loginView(code); },
+  (code) => { account = null; $('#joinp').hidden = true; leaveTogether(); stopInbox(); inbox = []; activity = []; activityAt = 0; loginView(code); },
 );
 { // launch intro: plays over the loading app, removes itself; any click or key skips it
   const intro = $('#intro');

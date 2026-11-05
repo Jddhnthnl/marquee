@@ -146,3 +146,24 @@ assert.equal(torboxKey(['https://torrentio.strem.fun/manifest.json']), null, 'no
 assert.equal(daysLeft('2026-11-12T00:00:00Z', Date.parse('2026-11-05T12:00:00Z')), 7, 'partial days round up');
 assert.ok(daysLeft('2026-11-01T00:00:00Z', Date.parse('2026-11-05T00:00:00Z')) < 0, 'expired is negative');
 assert.equal(daysLeft(null), null, 'free plan has no expiry');
+
+// watch party
+{
+  const { partyCode, partyStale, partyPos, partyNews, PARTY_STALE } = await import('./playback.js');
+  assert.match(partyCode(), /^[A-HJ-NP-Z]{4}$/, 'party code: 4 letters, no I or O');
+  assert.equal(partyCode(() => 0.999), 'ZZZZ');
+  const p = { playing: true, pos: 100, at: 1e6, by: 'a', videoId: 'v', members: { a: { name: 'Ann' }, b: { name: 'Ben' } } };
+  assert.equal(partyPos(p, 1e6 + 5000), 105, 'playing: position moves with time');
+  assert.equal(partyPos({ ...p, playing: false }, 1e6 + 5000), 100, 'paused: position holds');
+  assert.equal(partyStale(p, 1e6 + PARTY_STALE + 1), true);
+  assert.equal(partyStale(p, 1e6 + 1000), false);
+  assert.equal(partyStale(null), true, 'a missing party is over');
+  assert.deepEqual(partyNews(p, { ...p, playing: false, pos: 103, at: 1e6 + 3000 }, 'b'), ['Ann paused']);
+  assert.deepEqual(partyNews(p, { ...p, playing: false, pos: 103, at: 1e6 + 3000 }, 'a'), [], 'no notice for your own change');
+  assert.deepEqual(partyNews(p, { ...p, pos: 600, at: 1e6 + 3000 }, 'b'), ['Ann jumped to 10:00']);
+  assert.deepEqual(partyNews(p, { ...p, pos: 104, at: 1e6 + 3000 }, 'b'), [], 'a small re-sync is not a jump');
+  assert.deepEqual(partyNews(p, { ...p, members: { a: p.members.a, c: { name: 'Cy' } } }, 'a'), ['Cy joined', 'Ben left']);
+  assert.deepEqual(partyNews(p, { ...p, members: { ...p.members, b: { name: 'Ben', buffering: true } } }, 'a'), ['Ben is buffering']);
+  assert.deepEqual(partyNews(p, { ...p, videoId: 'v2', at: 1e6 + 9000, pos: 0 }, 'b'), [], 'an episode change shows its own notice');
+}
+console.log('party ok');

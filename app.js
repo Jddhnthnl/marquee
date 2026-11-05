@@ -3,7 +3,7 @@ import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, choo
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -790,7 +790,7 @@ const LIB_SORT = { title: (a, b) => a.name.localeCompare(b.name), released: (a, 
 function libraryView() {
   const sort = LIB_SORT[settings().librarySort];
   const items = sort ? [...library()].sort(sort) : [...library()].reverse(); // added: newest first
-  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS(false)}
     ${items.length ? FIT_LINK : ''}${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : state('Titles you save show up here. Open any title and choose Save to library.')}</section>`;
 }
 
@@ -814,6 +814,31 @@ async function fitCands() {
   }));
   return [...out.values()];
 }
+const LIB_TABS = (cal) => `<div class="seasons lib-tabs"><a href="#/library"${cal ? '' : ' aria-current="page"'}>Titles</a><a href="#/library/calendar"${cal ? ' aria-current="page"' : ''}>Calendar</a></div>`;
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Calendar: air dates of Library series' episodes, a month at a time; watched ones dimmed. A list on narrow windows (CSS).
+async function calendarView(ym) {
+  const today = ymd(new Date()), [y, m] = (/^\d{4}-\d\d$/.test(ym ?? '') ? ym : today.slice(0, 7)).split('-').map(Number);
+  const step = (n) => `#/library/calendar/${ymd(new Date(y, m - 1 + n, 1)).slice(0, 7)}`;
+  const title = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const series = library().filter((x) => x.type === 'series');
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS(true)}
+    <div class="cal-head"><a class="btn quiet" href="${step(-1)}" aria-label="Previous month">‹</a><h2>${esc(title)}</h2><a class="btn quiet" href="${step(1)}" aria-label="Next month">›</a></div>
+    <div id="cal-out">${state(series.length ? 'Loading episodes…' : 'Save a series to your library to see when its episodes air.')}</div></section>`;
+  if (!series.length) return;
+  const seq = routeSeq, metas = (await Promise.all(series.map((s) => metaOf('series', s.id)))).filter((x) => x?.videos);
+  if (seq !== routeSeq) return;
+  const days = airDays(metas, ymd(new Date(y, m - 1, 1)).slice(0, 7)), prog = progress();
+  const wd = (d) => new Date(`${d}T12:00`).toLocaleDateString(undefined, { weekday: 'short' });
+  const heads = monthDays(2023, 0).slice(0, 7).map((d) => `<li class="cal-wdh" aria-hidden="true">${esc(wd(d))}</li>`).join(''); // Jan 2023 starts on a Sunday
+  const cell = (d) => (!d ? '<li class="cal-blank" aria-hidden="true"></li>'
+    : `<li class="cal-day${days[d] ? ' has' : ''}"${d === today ? ' aria-current="date"' : ''}><span class="cal-date"><span class="cal-wd">${esc(wd(d))} </span>${+d.slice(8)}</span>
+      ${(days[d] ?? []).map(({ meta, v }) => `<a class="cal-ep${finished(prog[v.id]) ? ' seen' : ''}" href="#/meta/series/${encodeURIComponent(meta.id)}/${encodeURIComponent(v.id)}">${esc(meta.name)} <span>${epLabel(v.season, v.episode)}</span></a>`).join('')}</li>`);
+  $('#cal-out').innerHTML = `<ol class="cal">${heads}${monthDays(y, m - 1).map(cell).join('')}</ol>`
+    + (Object.keys(days).length ? '' : `<p class="hint">No episodes of your Library series air in ${esc(title)}.</p>`);
+}
+
 async function fitView() {
   const seq = routeSeq;
   app.innerHTML = `<section class="page"><h1 class="page-title">What can I watch in…</h1>
@@ -1226,7 +1251,7 @@ async function route() {
     if (view === 'search') return search(decodeURIComponent(a || ''));
     if (view === 'meta') return details(a, decodeURIComponent(b), c && decodeURIComponent(c));
     if (view === 'addons') return addonsView();
-    if (view === 'library') return libraryView();
+    if (view === 'library') return a === 'calendar' ? calendarView(b) : libraryView();
     if (view === 'fit') return fitView();
     if (view === 'profiles') return profilesView();
     if (view === 'settings') return settingsView();

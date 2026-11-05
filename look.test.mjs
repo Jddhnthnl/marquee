@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -101,3 +101,15 @@ assert.deepEqual(fitList(fc, { max: 45 }).map((c) => c.id), ['b', 'a'], 'fits, l
 assert.deepEqual(fitList(fc, { max: 45, genre: 'Drama' }).map((c) => c.id), ['a'], 'genre filter');
 assert.deepEqual(fitList(fc, { max: 0 }).map((c) => c.id), ['c', 'b', 'a'], 'any length');
 assert.deepEqual(fitList(fc, { max: 30 }), [], 'nothing fits');
+
+const nov = monthDays(2026, 10);
+assert.equal(nov.length, 30, 'Nov 2026 starts on a Sunday: no blanks');
+assert.deepEqual([nov[0], nov.at(-1)], ['2026-11-01', '2026-11-30']);
+const feb = monthDays(2028, 1);
+assert.deepEqual([feb.indexOf('2028-02-01'), feb.at(-1)], [2, '2028-02-29'], 'Feb 2028 starts Tuesday, leap day');
+const sa = { name: 'B show', videos: [{ season: 1, episode: 2, released: '2026-11-03T00:00:00.000Z' }, { season: 1, episode: 1, released: '2026-11-03T00:00:00.000Z' },
+  { season: 0, episode: 1, released: '2026-11-04T00:00:00.000Z' }, { season: 1, episode: 3, released: '2026-12-01T00:00:00.000Z' }, { season: 1, episode: 4 }] };
+const sb = { name: 'A show', videos: [{ season: 2, episode: 5, released: '2026-11-03T00:00:00.000Z' }] };
+const days = airDays([sa, sb], '2026-11');
+assert.deepEqual(Object.keys(days), ['2026-11-03'], 'specials, other months and undated left out');
+assert.deepEqual(days['2026-11-03'].map((x) => x.meta.name + x.v.episode), ['A show5', 'B show1', 'B show2'], 'by show, then episode');

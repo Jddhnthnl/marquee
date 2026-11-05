@@ -125,3 +125,20 @@ export function runtimeMin(r) {
 export const fitList = (cands, { max = 0, genre = '' } = {}) => cands
   .filter((c) => c.left != null && (!max || c.left <= max) && (!genre || c.genres.includes(genre)))
   .sort((a, b) => b.left - a.left);
+// Calendar month m (0-11): blanks before the 1st, then each day as 'YYYY-MM-DD'.
+// shortcut: weeks always start on Sunday; read the locale's first weekday if anyone asks
+export function monthDays(y, m) {
+  const pad = (n) => String(n).padStart(2, '0'), first = new Date(y, m, 1).getDay(), n = new Date(y, m + 1, 0).getDate();
+  return [...Array(first).fill(null), ...Array.from({ length: n }, (_, i) => `${y}-${pad(m + 1)}-${pad(i + 1)}`)];
+}
+// Dated episodes (specials left out) of the given series metas, by air day, for days starting with prefix ('YYYY-MM').
+// The date part of the addon's timestamp is its air date: Cinemeta stamps midnight UTC or midnight US Eastern, so a local-time conversion would move some a day.
+export function airDays(metas, prefix) {
+  const out = {};
+  for (const meta of metas) for (const v of meta.videos ?? []) {
+    const d = v.released?.slice(0, 10);
+    if (v.season > 0 && d?.startsWith(prefix)) (out[d] ??= []).push({ meta, v });
+  }
+  for (const list of Object.values(out)) list.sort((a, b) => a.meta.name.localeCompare(b.meta.name) || a.v.season - b.v.season || a.v.episode - b.v.episode);
+  return out;
+}

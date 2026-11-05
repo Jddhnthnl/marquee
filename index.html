@@ -195,6 +195,25 @@
   .seasons { display: flex; flex-wrap: wrap; gap: 4px 22px; border-bottom: 1px solid var(--aisle-2); }
   .seasons button { background: none; border: 0; color: var(--usher); font: 600 1.35rem var(--display); padding: 6px 0 10px; cursor: pointer; }
   .seasons button[aria-selected="true"] { color: var(--screen); box-shadow: inset 0 -2px var(--tungsten); }
+  .seasons a { color: var(--usher); font: 600 1.35rem var(--display); padding: 6px 0 10px; text-decoration: none; }
+  .seasons a[aria-current] { color: var(--screen); box-shadow: inset 0 -2px var(--tungsten); }
+  .lib-tabs { margin: 6px 0 18px; }
+  .cal-head { display: flex; align-items: center; gap: 14px; margin: 18px 0 14px; }
+  .cal-head h2 { margin: 0; min-width: 9ch; text-align: center; font: 600 1.35rem var(--display); }
+  .cal { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .cal-wdh { color: var(--usher); font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; padding: 0 8px 4px; }
+  .cal-day { min-height: 96px; padding: 6px 8px; border-radius: var(--r); background: var(--aisle); display: flex; flex-direction: column; gap: 4px; }
+  .cal-day[aria-current] { box-shadow: inset 0 0 0 2px var(--tungsten); }
+  .cal-date { color: var(--usher); font-size: .85rem; }
+  .cal-wd { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } /* the column head says it; screen readers still hear it */
+  .cal-ep { color: var(--screen); text-decoration: none; font-size: .84rem; line-height: 1.25; }
+  .cal-ep span { color: var(--usher); white-space: nowrap; }
+  .cal-ep:hover { color: var(--tungsten); }
+  .cal-ep.seen { opacity: .45; }
+  @media (max-width: 700px) {
+    .cal { display: block; } .cal-wdh, .cal-blank, .cal-day:not(.has) { display: none; }
+    .cal-day { min-height: 0; margin-bottom: 6px; } .cal-wd { position: static; width: auto; height: auto; clip-path: none; }
+  }
   .ep-list { list-style: none; margin: 0; padding: 0; }
   .ep { display: grid; grid-template-columns: 168px 2.4ch 1fr; gap: 16px; align-items: center; width: 100%; padding: 12px 8px;
         background: none; border: 0; border-bottom: 1px solid var(--aisle); color: inherit; font: inherit; text-align: left; cursor: pointer; }

@@ -142,3 +142,21 @@ export function airDays(metas, prefix) {
   for (const list of Object.values(out)) list.sort((a, b) => a.meta.name.localeCompare(b.meta.name) || a.v.season - b.v.season || a.v.episode - b.v.episode);
   return out;
 }
+// Yearly recap from history entries ({day, id, videoId, minutes}): totals and one stub per title, most-watched first.
+// A movie's videoId is its own id; anything else is an episode. genresOf(id) feeds the top genre, weighted by minutes.
+export function recap(entries, genresOf = () => []) {
+  const by = new Map(), months = Array(12).fill(0), genres = {};
+  for (const e of entries) {
+    if (!by.has(e.id)) by.set(e.id, { id: e.id, type: e.videoId === e.id ? 'movie' : 'series', minutes: 0, eps: new Set(), first: e.day });
+    const t = by.get(e.id);
+    t.minutes += e.minutes; if (e.day < t.first) t.first = e.day;
+    if (t.type === 'series') t.eps.add(e.videoId);
+    months[+e.day.slice(5, 7) - 1] += e.minutes;
+  }
+  const titles = [...by.values()].map(({ eps, ...t }) => ({ ...t, episodes: eps.size })).sort((a, b) => b.minutes - a.minutes);
+  for (const t of titles) for (const g of genresOf(t.id) ?? []) genres[g] = (genres[g] ?? 0) + t.minutes;
+  const minutes = titles.reduce((n, t) => n + t.minutes, 0);
+  return { minutes, titles, episodes: titles.reduce((n, t) => n + t.episodes, 0), movies: titles.filter((t) => t.type === 'movie').length,
+    busiest: minutes ? months.indexOf(Math.max(...months)) : null, genre: Object.entries(genres).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null };
+}
+export const hoursMin = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`);

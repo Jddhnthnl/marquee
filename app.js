@@ -3,7 +3,7 @@ import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, choo
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -790,7 +790,7 @@ const LIB_SORT = { title: (a, b) => a.name.localeCompare(b.name), released: (a, 
 function libraryView() {
   const sort = LIB_SORT[settings().librarySort];
   const items = sort ? [...library()].sort(sort) : [...library()].reverse(); // added: newest first
-  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS(false)}
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS('titles')}
     ${items.length ? FIT_LINK : ''}${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : state('Titles you save show up here. Open any title and choose Save to library.')}</section>`;
 }
 
@@ -814,7 +814,8 @@ async function fitCands() {
   }));
   return [...out.values()];
 }
-const LIB_TABS = (cal) => `<div class="seasons lib-tabs"><a href="#/library"${cal ? '' : ' aria-current="page"'}>Titles</a><a href="#/library/calendar"${cal ? ' aria-current="page"' : ''}>Calendar</a></div>`;
+const LIB_TABS = (cur) => `<div class="seasons lib-tabs">${[['titles', '', 'Titles'], ['calendar', '/calendar', 'Calendar'], ['recap', '/recap', 'Ticket stubs']]
+  .map(([k, path, t]) => `<a href="#/library${path}"${k === cur ? ' aria-current="page"' : ''}>${t}</a>`).join('')}</div>`;
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // Calendar: air dates of Library series' episodes, a month at a time; watched ones dimmed. A list on narrow windows (CSS).
@@ -823,7 +824,7 @@ async function calendarView(ym) {
   const step = (n) => `#/library/calendar/${ymd(new Date(y, m - 1 + n, 1)).slice(0, 7)}`;
   const title = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const series = library().filter((x) => x.type === 'series');
-  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS(true)}
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS('calendar')}
     <div class="cal-head"><a class="btn quiet" href="${step(-1)}" aria-label="Previous month">‹</a><h2>${esc(title)}</h2><a class="btn quiet" href="${step(1)}" aria-label="Next month">›</a></div>
     <div id="cal-out">${state(series.length ? 'Loading episodes…' : 'Save a series to your library to see when its episodes air.')}</div></section>`;
   if (!series.length) return;
@@ -837,6 +838,30 @@ async function calendarView(ym) {
       ${(days[d] ?? []).map(({ meta, v }) => `<a class="cal-ep${finished(prog[v.id]) ? ' seen' : ''}" href="#/meta/series/${encodeURIComponent(meta.id)}/${encodeURIComponent(v.id)}">${esc(meta.name)} <span>${epLabel(v.season, v.episode)}</span></a>`).join('')}</li>`);
   $('#cal-out').innerHTML = `<ol class="cal">${heads}${monthDays(y, m - 1).map(cell).join('')}</ol>`
     + (Object.keys(days).length ? '' : `<p class="hint">No episodes of your Library series air in ${esc(title)}.</p>`);
+}
+
+// Ticket stubs: a year of viewing history (history_<year>_<pid>) as headline numbers and one stub per title.
+async function recapView(yr) {
+  const mine = Object.keys(localStorage).map((k) => /^history_(\d{4})_(.+)$/.exec(k)).filter((x) => x?.[2] === pid()).map((x) => +x[1]);
+  const years = [...new Set([new Date().getFullYear(), ...mine])].sort((a, b) => b - a), year = years.includes(+yr) ? +yr : years[0];
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS('recap')}
+    ${years.length > 1 ? `<fieldset class="recap-years"><legend class="sr-only">Year</legend>${pills('recapYear', years.map((y) => [String(y), String(y)]), String(year))}</fieldset>` : ''}
+    <div id="recap-out">${state('Tearing stubs…')}</div></section>`;
+  app.querySelectorAll('[name=recapYear]').forEach((i) => (i.onchange = () => (location.hash = `#/library/recap/${i.value}`)));
+  const entries = load(pk(`history_${year}`), []);
+  if (!entries.length) return void ($('#recap-out').innerHTML = state(`Nothing logged in ${year} yet. Anything you play for 2 minutes or more gets a stub here.`));
+  const seq = routeSeq, metas = Object.fromEntries(await Promise.all(recap(entries).titles.map(async (t) => [t.id, await metaOf(t.type, t.id)])));
+  if (seq !== routeSeq) return;
+  const r = recap(entries, (id) => metas[id]?.genres), lib = new Map(library().map((x) => [x.id, x]));
+  const stat = (k, v) => (v == null ? '' : `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`);
+  const month = r.busiest == null ? null : new Date(year, r.busiest, 1).toLocaleDateString(undefined, { month: 'long' });
+  $('#recap-out').innerHTML = `<dl class="recap-stats">${stat('Watched', hoursMin(r.minutes))}${stat('Titles', r.titles.length)}${stat('Episodes', r.episodes || null)}${stat('Films', r.movies || null)}${stat('Busiest month', month)}${stat('Top genre', r.genre)}</dl>
+    <ol class="stubs">${r.titles.map((t, i) => {
+      const m = metas[t.id] ?? {}, name = m.name || lib.get(t.id)?.name || t.id, poster = m.poster || lib.get(t.id)?.poster;
+      return `<li><a class="stub" href="#/meta/${t.type}/${encodeURIComponent(t.id)}">${poster ? `<img loading="lazy" src="${esc(poster)}" alt="">` : '<span class="stub-img"></span>'}
+        <span class="stub-body"><span class="stub-no">Admit one · No. ${i + 1}</span><span class="stub-title">${esc(name)}</span>
+        <span class="stub-line">${hoursMin(t.minutes)}${t.episodes ? ` · ${t.episodes} episode${t.episodes > 1 ? 's' : ''}` : ''}</span><span class="stub-line">First seen ${esc(fmtDate(`${t.first}T12:00`))}</span></span></a></li>`;
+    }).join('')}</ol>`;
 }
 
 async function fitView() {
@@ -1251,7 +1276,7 @@ async function route() {
     if (view === 'search') return search(decodeURIComponent(a || ''));
     if (view === 'meta') return details(a, decodeURIComponent(b), c && decodeURIComponent(c));
     if (view === 'addons') return addonsView();
-    if (view === 'library') return a === 'calendar' ? calendarView(b) : libraryView();
+    if (view === 'library') return a === 'calendar' ? calendarView(b) : a === 'recap' ? recapView(b) : libraryView();
     if (view === 'fit') return fitView();
     if (view === 'profiles') return profilesView();
     if (view === 'settings') return settingsView();

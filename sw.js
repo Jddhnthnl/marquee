@@ -1,5 +1,5 @@
 // Offline app shell: network first (so edits show up), cache as fallback (so the app opens without the server).
-const CACHE = 'marquee-v16';
+const CACHE = 'marquee-v17';
 const SHELL = ['./', 'index.html', 'app.js', 'protocol.js', 'sync.js', 'playback.js', 'look.js', 'diag.js', 'manifest.webmanifest', 'icon.svg', 'icon-512.png'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });

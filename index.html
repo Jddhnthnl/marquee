@@ -210,6 +210,23 @@
   .cal-ep span { color: var(--usher); white-space: nowrap; }
   .cal-ep:hover { color: var(--tungsten); }
   .cal-ep.seen { opacity: .45; }
+  .recap-years { margin: 0 0 22px; padding: 0; border: 0; }
+  .recap-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 30px; }
+  .recap-stats div { background: var(--aisle); border-radius: var(--r); padding: 14px 16px; }
+  .recap-stats dt { color: var(--usher); font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
+  .recap-stats dd { margin: 4px 0 0; font: 600 1.6rem var(--display); color: var(--screen); }
+  .stubs { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+  /* a ticket stub: poster on the left, perforated edge, punched notches top and bottom */
+  .stub { position: relative; display: flex; gap: 14px; padding: 10px 14px 10px 10px; border-radius: var(--r); background: var(--aisle); color: var(--screen); text-decoration: none;
+    -webkit-mask: radial-gradient(circle 7px at 82px 0, #0000 98%, #000) top / 100% 51% no-repeat, radial-gradient(circle 7px at 82px 100%, #0000 98%, #000) bottom / 100% 51% no-repeat;
+    mask: radial-gradient(circle 7px at 82px 0, #0000 98%, #000) top / 100% 51% no-repeat, radial-gradient(circle 7px at 82px 100%, #0000 98%, #000) bottom / 100% 51% no-repeat; }
+  .stub::after { content: ''; position: absolute; left: 81px; top: 10px; bottom: 10px; border-left: 2px dashed var(--seat); }
+  .stub:hover { background: var(--aisle-2); }
+  .stub img, .stub-img { flex: none; width: 62px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 3px; background: var(--seat); }
+  .stub-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding-left: 8px; }
+  .stub-no { color: var(--tungsten); font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; }
+  .stub-title { font: 600 1.1rem var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stub-line { color: var(--usher); font-size: .85rem; }
   @media (max-width: 700px) {
     .cal { display: block; } .cal-wdh, .cal-blank, .cal-day:not(.has) { display: none; }
     .cal-day { min-height: 0; margin-bottom: 6px; } .cal-wd { position: static; width: auto; height: auto; clip-path: none; }

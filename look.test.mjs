@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -87,7 +87,6 @@ assert.deepEqual(continueRows(prog, metas, { ...cwSet, cwUpcoming: false }, now)
 // next up off: the most recently watched episode, finished ones drop out
 assert.deepEqual(continueRows(prog, metas, { cwNextUp: false, cwUpcoming: true }, now).resume.map((x) => x.videoId), ['m1']);
 
-console.log('look tests pass');
 
 // What can I watch in…
 assert.equal(runtimeMin('142 min'), 142);
@@ -113,3 +112,12 @@ const sb = { name: 'A show', videos: [{ season: 2, episode: 5, released: '2026-1
 const days = airDays([sa, sb], '2026-11');
 assert.deepEqual(Object.keys(days), ['2026-11-03'], 'specials, other months and undated left out');
 assert.deepEqual(days['2026-11-03'].map((x) => x.meta.name + x.v.episode), ['A show5', 'B show1', 'B show2'], 'by show, then episode');
+
+const hist = [{ day: '2026-03-02', id: 's', videoId: 's:1:1', minutes: 50 }, { day: '2026-03-01', id: 's', videoId: 's:1:2', minutes: 45 },
+  { day: '2026-03-05', id: 's', videoId: 's:1:2', minutes: 10 }, { day: '2026-07-04', id: 'm', videoId: 'm', minutes: 130 }];
+const rc = recap(hist, (id) => ({ s: ['Crime', 'Drama'], m: ['Drama', 'Action'] })[id]);
+assert.deepEqual(rc.titles.map((t) => [t.id, t.type, t.minutes, t.episodes, t.first]), [['m', 'movie', 130, 0, '2026-07-04'], ['s', 'series', 105, 2, '2026-03-01']], 'stubs: most-watched first, rewatched episode counted once');
+assert.deepEqual([rc.minutes, rc.episodes, rc.movies, rc.busiest, rc.genre], [235, 2, 1, 6, 'Drama'], 'totals; busiest is July (130) over March (105); Drama on both');
+assert.deepEqual(recap([]), { minutes: 0, titles: [], episodes: 0, movies: 0, busiest: null, genre: null }, 'empty year');
+assert.deepEqual([hoursMin(45), hoursMin(60), hoursMin(135)], ['45 min', '1 h', '2 h 15 min']);
+console.log('look tests pass');

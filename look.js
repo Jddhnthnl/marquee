@@ -177,6 +177,16 @@ export function nearest(from, rects, dir) {
   return best;
 }
 
+// Profile PIN: 4 digits, stored as a salted SHA-256 hex in the synced profile list.
+// shortcut: 10,000 PINs means any hash falls to brute force; it's a lock against housemates, not a vault. Upgrade if PINs ever guard real secrets.
+export const PIN = /^\d{4}$/;
+export async function pinHash(pin, salt) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+// Wrong tries in a row -> ms to wait before the next one: 30 s after every 5th.
+export const pinWait = (fails) => (fails > 0 && fails % 5 === 0 ? 30000 : 0);
+
 // along: how far the candidate is in the arrow's direction; across: how far it sits off that line (both px, centre to centre).
 // Lower wins. The weighting decides whether Down from a nav link jumps to a close item far to the side or the item straight below.
 function focusScore(along, across) {

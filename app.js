@@ -1,10 +1,10 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft } from './playback.js';
-import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
+import { push, drop, watch, signIn, signUp, resetPassword, checkPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { deviceCode, deviceLink, sync as traktPull, addHistory, revoke } from './trakt.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -25,6 +25,9 @@ const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; 
 const save = (k, v) => { const raw = JSON.stringify(v); localStorage.setItem(k, raw); push(k, raw); };
 const profiles = () => load('profiles', { active: '1', list: [{ id: '1', name: 'Main', color: '#3E7C8C' }] });
 const pid = () => profiles().active;
+// Profiles opened with their PIN this session. Picking a profile on "Who's watching?" clears it, so a PIN is asked every time it's picked.
+let unlocked = new Set();
+const locked = (x) => !!x?.pin && !unlocked.has(x.id);
 const pk = (name) => `${name}_${pid()}`;
 const addonUrls = () => load(pk('installed_addon_urls'), DEFAULT_ADDONS);
 const enabledStates = () => load(pk('addon_enabled_states'), {});
@@ -922,17 +925,52 @@ function profilesView() {
   const p = profiles();
   app.innerHTML = `<section class="page who"><h1 class="marquee">Who’s watching?</h1>
     <ul class="profiles">${p.list.map((x) => `<li><button data-id="${esc(x.id)}" ${x.id === p.active ? 'aria-current="true"' : ''}>
-      ${avatar(x, '', 'data-tilt')}<span>${esc(x.name)}</span></button></li>`).join('')}
+      ${avatar(x, '', 'data-tilt')}<span>${esc(x.name)}${x.pin ? ' <svg class="lock" viewBox="0 0 16 16" role="img" aria-label="PIN locked"><path d="M4 7V5a4 4 0 0 1 8 0v2M3 7h10v8H3z"/></svg>' : ''}</span></button></li>`).join('')}
       <li><button id="new"><span class="avatar add">+</span><span>Add profile</span></button></li></ul>
     <p class="hint">Each profile keeps its own addons, library, progress and settings. <a class="link" href="#/settings">Edit ${esc(p.list.find((x) => x.id === p.active)?.name ?? 'profile')}</a></p>
     <p class="hint">Signed in as ${esc(account?.email)}. <button class="link" id="signout">Sign out</button></p></section>`;
   $('#signout').onclick = async () => { await signOutAndForget(); location.hash = '#/'; };
-  app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); traktSync(); location.hash = '#/'; }));
+  app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { unlocked = new Set(); save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); traktSync(); location.hash = '#/'; }));
   $('#new').onclick = () => {
     const name = prompt('Name for the new profile')?.trim();
     if (!name) return;
     save('profiles', { ...p, list: [...p.list, { id: newProfileId(), name: name.slice(0, 24), color: PROFILE_COLORS[p.list.length % PROFILE_COLORS.length][0] }] });
     profilesView();
+  };
+}
+
+// A locked profile: its PIN before anything of it shows. "Forgot PIN?" takes the account password and removes the PIN.
+let pinFails = 0, pinUntil = 0; // shortcut: in memory, so a reload resets the wait; fine for a housemate lock
+function pinView(x) {
+  app.innerHTML = `<section class="page who pin">${avatar(x, 'lg')}<h1 class="marquee">${esc(x.name)}</h1>
+    <form id="pin-form"><label for="pin">Enter the PIN for ${esc(x.name)}</label>
+      <input id="pin" class="pin-in" inputmode="numeric" maxlength="4" autocomplete="off" aria-describedby="pin-say"></form>
+    <p id="pin-say" class="hint" role="status"></p>
+    <p class="hint"><a class="link" href="#/profiles">Switch profile</a> · <button class="link" id="pin-forgot">Forgot PIN?</button></p></section>`;
+  const say = (t) => ($('#pin-say').textContent = t), inp = $('#pin');
+  inp.focus();
+  $('#pin-form').onsubmit = (e) => e.preventDefault();
+  inp.oninput = async () => {
+    inp.value = inp.value.replace(/\D/g, '');
+    if (!PIN.test(inp.value)) return;
+    const wait = pinUntil - Date.now(), tried = inp.value;
+    inp.value = '';
+    if (wait > 0) return say(`Too many wrong tries. Wait ${Math.ceil(wait / 1000)} s.`);
+    if (await pinHash(tried, x.pin.salt) === x.pin.hash) { pinFails = 0; unlocked.add(x.id); return route(); }
+    pinUntil = Date.now() + pinWait(++pinFails);
+    say(pinUntil > Date.now() ? 'Wrong PIN. Wait 30 s before the next try.' : 'Wrong PIN. Try again.');
+  };
+  $('#pin-forgot').onclick = () => {
+    $('#pin-form').outerHTML = `<form id="pw-form"><label for="pin-pw">Your Marquee account password removes the PIN</label>
+      <input id="pin-pw" class="pin-pw" type="password" autocomplete="current-password" required> <button class="btn primary">Remove PIN</button></form>`;
+    $('#pin-forgot').remove(); say(''); $('#pin-pw').focus();
+    $('#pw-form').onsubmit = async (e) => {
+      e.preventDefault();
+      try { await checkPassword($('#pin-pw').value); } catch (err) { return say(/invalid-credential|wrong-password/.test(err.code) ? 'That password isn’t right.' : loginError(err.code)); }
+      const p = profiles();
+      save('profiles', { ...p, list: p.list.map((y) => (y.id === x.id ? { ...y, pin: undefined } : y)) }); // undefined drops out of the JSON
+      unlocked.add(x.id); route();
+    };
   };
 }
 
@@ -1150,6 +1188,9 @@ function profileSection() {
     ${setRow('Picture', `<div class="pics">${pic('', 'First letter', avatar({ ...m, avatar: '' }))}${Object.entries(AVATARS).map(([k, [n]]) => pic(k, n, avatar({ ...m, avatar: k }))).join('')}${photo ? pic(m.avatar, 'Your photo', avatar(m)) : ''}</div>
       <p class="hint"><button class="btn quiet" id="upload">${photo ? 'Change photo' : 'Upload a photo'}</button><input type="file" id="photo" accept="image/*" hidden></p>`,
       'Photos are cropped to a circle and shrunk to a small file before they sync.')}
+    ${setRow('PIN', `<div id="pin-zone"><input id="pin-new" class="lang text" inputmode="numeric" maxlength="4" placeholder="4 digits" aria-label="${m.pin ? 'New PIN' : 'PIN'}" autocomplete="off">
+      <button class="btn quiet" id="pin-set">${m.pin ? 'Change PIN' : 'Set PIN'}</button>${m.pin ? ' <button class="btn quiet" id="pin-off">Remove PIN</button>' : ''}</div>`,
+      m.pin ? `${esc(m.name)} asks for its PIN when it’s opened, on every PC.` : 'Ask for a 4-digit PIN when this profile is opened, on every PC. Forgot it? Your account password removes it.')}
     ${setRow('Delete', `<div id="del-zone"><button class="btn quiet danger" id="pdel" ${only ? 'disabled' : ''}>Delete ${esc(m.name)}</button></div>`,
       only ? 'Marquee needs at least one profile. Add another on the profile screen first.' : 'Removes this profile’s library, progress, addons and settings from every PC.')}`;
 }
@@ -1180,6 +1221,16 @@ function wireProfile() {
     try { editMe({ avatar: await shrinkPhoto(f) }); refresh('#upload'); }
     catch { $('#upload').insertAdjacentHTML('afterend', ' <span class="error">That file isn’t a picture Marquee can read. Try a JPEG or PNG.</span>'); }
   };
+  $('#pin-set').onclick = async () => {
+    const box = $('#pin-new'), v = box.value.trim();
+    box.setCustomValidity(PIN.test(v) ? '' : 'Enter 4 digits.');
+    if (!box.reportValidity()) return;
+    const salt = crypto.randomUUID();
+    editMe({ pin: { salt, hash: await pinHash(v, salt) } });
+    unlocked.add(pid()); // setting it doesn't lock you out of the profile you're in
+    refresh('#pin-set');
+  };
+  if ($('#pin-off')) $('#pin-off').onclick = () => { editMe({ pin: undefined }); refresh('#pin-set'); };
   $('#pdel').onclick = () => {
     $('#del-zone').innerHTML = `<p class="confirm" role="alert">Delete ${esc(me().name)} and everything in it? This can’t be undone.</p>
       <button class="btn danger" id="pdel-yes">Delete profile</button> <button class="btn quiet" id="pdel-no">Keep it</button>`;
@@ -1301,6 +1352,7 @@ async function route() {
   applyLook();
   document.querySelectorAll('nav [data-nav]').forEach((l) => l.dataset.nav === (view || '') ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current'));
   if (view && view !== 'meta') ambient(null);
+  if (locked(me) && view !== 'profiles') return pinView(me);
   // A slow addon manifest (15 s timeout) used to leave the window blank; show placeholders while they load.
   if (addonUrls().some((u) => !manifests.has(u))) app.innerHTML = `<section class="hero"></section>${row('Loading', '', '<div class="skeleton"></div>'.repeat(8))}`;
   await loadManifests();
@@ -1409,7 +1461,7 @@ watch(
 // Launch: offer to carry on with what you watched last (Settings > Continue watching).
 let autoStart = null; // videoId the details page should start playing on its own
 function resumeOffer() {
-  const set = settings(), p = set.resumePrompt && !playing && cwData(set).resume[0];
+  const set = settings(), p = set.resumePrompt && !playing && !locked(me()) && cwData(set).resume[0];
   if (!p) return;
   const d = document.createElement('dialog');
   d.className = 'resume';

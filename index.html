@@ -349,6 +349,12 @@
   .invites li { grid-template-columns: minmax(0, 1fr) auto; }
   .invites li > span:first-child { overflow-wrap: anywhere; }
   .invite-add { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .pin form { display: grid; justify-items: center; gap: 12px; margin-top: 18px; }
+  .pin-in { width: 6.5ch; padding: 10px 0 10px .45em; text-align: center; font: 700 2.2rem/1 var(--display); letter-spacing: .45em; color: var(--screen);
+    background: transparent; border: 0; border-bottom: 2px solid var(--tungsten); -webkit-text-security: disc; }
+  .pin-in:focus { outline: none; border-bottom-color: var(--screen); }
+  .pin-pw { padding: 10px 12px; min-width: 18rem; }
+  .profiles .lock { width: .8em; height: .8em; fill: none; stroke: currentColor; stroke-width: 1.6; vertical-align: -1px; }
   .tk-code { font: 700 2rem/1 var(--display); letter-spacing: .2em; color: var(--tungsten); margin: 6px 0 12px; user-select: all; }
   .reports { list-style: none; margin: 0; padding: 0; max-width: 720px; }
   .reports li { padding: 10px 0; border-bottom: 1px solid var(--aisle); }

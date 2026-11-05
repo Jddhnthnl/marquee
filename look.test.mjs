@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -129,4 +129,12 @@ assert.equal(nearest(tile, shelf, 'left'), -1, 'nothing to the left');
 assert.equal(nearest(tile, [tile, ...shelf], 'up'), -1, 'never itself');
 const link = R(0, 0, 100, 50);
 assert.equal(nearest(link, [R(600, 60, 100, 50), R(0, 200, 100, 50)], 'down'), 1, 'straight below beats a nearer item far to the side');
+// profile PIN
+assert.ok(PIN.test('0420') && !PIN.test('123') && !PIN.test('12a4') && !PIN.test('12345'));
+const h = await pinHash('1234', 'salt');
+assert.match(h, /^[0-9a-f]{64}$/);
+assert.equal(h, await pinHash('1234', 'salt'), 'same pin + salt, same hash');
+assert.notEqual(h, await pinHash('1234', 'other'), 'salt matters');
+assert.notEqual(h, await pinHash('1235', 'salt'));
+assert.deepEqual([0, 1, 4, 5, 6, 10].map(pinWait), [0, 0, 0, 30000, 0, 30000]);
 console.log('look tests pass');

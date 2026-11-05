@@ -1,7 +1,7 @@
 // Login + cloud sync. Each synced localStorage key is one Firestore doc users/<uid>/kv/<key> = { v: JSON text, t: ms };
 // the newer t wins (last write wins). The rules in firestore.rules only let invited emails touch their own users/<uid>.
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut, EmailAuthProvider, reauthenticateWithCredential } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc, getDocsFromServer, setDoc, addDoc, deleteDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.2.0/firebase-firestore.js';
 
 // Web config only names the project; it is public by design.
@@ -162,6 +162,8 @@ function retry(user, onOut) {
 export const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);
 export const signUp = (email, password) => createUserWithEmailAndPassword(auth, email, password); // watch() gates it
 export const resetPassword = (email) => sendPasswordResetEmail(auth, email);
+// "Forgot PIN?": proves the account password without signing out. Rejects on a wrong password.
+export const checkPassword = (pw) => reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(auth.currentUser.email, pw));
 export async function signOutAndForget() {
   await signOut(auth);
   forget();

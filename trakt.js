@@ -61,7 +61,7 @@ async function call(cfg, token, path, body) {
   return r.status === 204 ? null : r.json();
 }
 const tokens = (t) => ({ access: t.access_token, refresh: t.refresh_token, expires: (t.created_at + t.expires_in) * 1000 });
-const grant = (cfg, extra) => call(cfg, null, '/oauth/token', { client_id: cfg.id, client_secret: cfg.secret, redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', ...extra });
+const grant = (cfg, extra) => call(cfg, null, '/oauth/token', { client_id: cfg.id, client_secret: cfg.secret, redirect_uri: 'http://localhost/marquee' /* must match the app registered on trakt.tv */, ...extra });
 
 // { device_code, user_code, verification_url, expires_in, interval }
 export const deviceCode = (cfg) => call(cfg, null, '/oauth/device/code', { client_id: cfg.id });

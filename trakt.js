@@ -1,6 +1,7 @@
 // Trakt for one profile: device-code sign-in, Trakt watchlist <-> Library (removals too), Trakt history in as watched marks,
 // finished titles out. Pure parts first so node can test them (trakt.test.mjs). Only IMDb ids (tt…) take part.
-// cfg = { id, secret } from trakt-config.js, which CI writes from repo secrets (gitignored, never committed).
+// cfg = { id } from trakt-config.js, which CI writes from a repo secret (gitignored). New Trakt apps are PKCE/public: no secret,
+// and an undefined cfg.secret drops out of JSON.stringify, so client_secret is simply not sent.
 const API = 'https://api.trakt.tv';
 const IMDB = /^tt\d+$/;
 const posterOf = (id) => `https://images.metahub.space/poster/medium/${id}/img`;

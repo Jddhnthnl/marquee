@@ -3,7 +3,7 @@ import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, choo
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -583,6 +583,35 @@ let shelf = null;   // { meta, type, groups } from the last streams() call
 let playing = null; // { meta, type, ctx, stream, groups } while mpv is open; ctx/stream change when you switch episode or source
 let lastHref = ''; // the last link handed to mpv, for Send diagnostics
 const tauri = window.__TAURI__;
+
+// Couch mode, for a PC on the TV: fullscreen, everything 125%, arrow keys move focus, Esc goes back.
+// Stored per PC ('couch' is not a synced key), so the laptop doesn't follow the TV PC. F10 or Settings > Look.
+const couchOn = () => localStorage.getItem('couch') === 'on';
+function setCouch(on) {
+  localStorage.setItem('couch', on ? 'on' : 'off');
+  document.documentElement.dataset.couch = on ? 'on' : 'off';
+  if (tauri) tauri.window.getCurrentWindow().setFullscreen(on).catch(() => {});
+  else if (on) document.documentElement.requestFullscreen?.().catch(() => {}); // the browser needs a key or click, so not at launch
+  else if (document.fullscreenElement) document.exitFullscreen();
+  const sw = $('[name=couch]');
+  if (sw) { sw.checked = on; sw.nextElementSibling.textContent = on ? 'On' : 'Off'; }
+}
+const ARROWS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+const box = (el) => (el.matches('input[type=radio], input[type=checkbox]') && el.closest('label') || el).getBoundingClientRect(); // pills and switches hide the input
+addEventListener('keydown', (e) => {
+  if (e.key === 'F10') { e.preventDefault(); return setCouch(!couchOn()); }
+  if (!couchOn() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const t = e.target, open = document.querySelector('dialog[open], [role=dialog]');
+  if (e.key === 'Escape') { if (!open && !t.matches?.('input, textarea, select')) history.back(); return; } // dialogs and the web player close themselves
+  const dir = ARROWS[e.key];
+  if (!dir || t.matches?.('textarea') || (dir === 'left' || dir === 'right') && t.matches?.('input:not([type=checkbox]), select')) return; // caret, sliders and pill groups keep left/right
+  const els = [...(open || document).querySelectorAll(FOCUSABLE)].filter((el) => !el.disabled && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+  e.preventDefault();
+  const to = t === document.body || !els.includes(t) ? els.find((el) => app.contains(el)) ?? els[0] : els[nearest(box(t), els.map(box), dir)];
+  if (to && to !== t) { to.focus({ preventScroll: true }); to.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); }
+});
+if (couchOn()) setCouch(true);
 const resumeAt = (p) => (p && p.positionMs / p.durationMs < 0.95 ? p.positionMs / 1000 : 0);
 const mediaTitle = (ctx) => ctx.name + (ctx.season ? ` ${epLabel(ctx.season, ctx.episode)}` : '');
 const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
@@ -1000,7 +1029,8 @@ const sections = (set) => [
     + setRow('Poster corners', pills('posterRadius', RADII, set.posterRadius))
     + switchRow('posterLabels', 'Titles under posters', set.posterLabels, 'Off leaves only the artwork.')
     + switchRow('landscape', 'Wide cards', set.landscape, 'Rows show the backdrop and title logo instead of the poster.')
-    + switchRow('intro', 'Launch intro', set.intro, 'The bulbs and curtain when Marquee opens.')),
+    + switchRow('intro', 'Launch intro', set.intro, 'The bulbs and curtain when Marquee opens.')
+    + switchRow('couch', 'Couch mode', couchOn(), 'For a PC on the TV: fullscreen, everything bigger, and the arrow keys move between items. Esc goes back. Only on this PC. F10 switches it too.')),
   sec('home', switchRow('hero', 'Banner', set.hero, 'The big rotating banner at the top of Home.')
     + setRow('Banner shows titles from', checks('heroRows', Object.entries(homeTitles()).filter(([k]) => k.includes('/')).map(([k, t]) => [k, t.split(', from')[0]]), set.heroRows),
       'Nothing ticked: the first row that has backdrops.')
@@ -1062,6 +1092,7 @@ function settingsView() {
     r.onchange = async () => {
       const v = value(r);
       if (r.type === 'checkbox' && r.closest('.switch')) r.nextElementSibling.textContent = v ? 'On' : 'Off';
+      if (r.name === 'couch') return setCouch(v); // per PC, so not in the synced settings
       if (r.name === 'customRule') {
         let bad = false; try { new RegExp(v); } catch { bad = true; }
         r.setAttribute('aria-invalid', String(bad));

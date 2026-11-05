@@ -63,6 +63,8 @@
   img { display: block; }
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--tungsten); outline-offset: 3px; border-radius: 2px; }
+  html[data-couch=on] body { zoom: 1.25; } /* couch mode: read from the sofa */
+  html[data-couch=on] :is(:focus-visible, :focus-visible .art, :focus-visible + span, :focus-visible ~ .avatar) { outline-width: 4px !important; outline-offset: 5px !important; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
   /* ---- nav ---- */
@@ -564,6 +566,7 @@
 try { const p = JSON.parse(localStorage.getItem('profiles')), s = JSON.parse(localStorage.getItem('settings_' + (p ? p.active : '1'))) || {}, d = document.documentElement.dataset;
   d.accent = s.accent || 'tungsten'; d.poster = s.posterSize || 'M'; d.intro = s.intro === false ? 'off' : 'on';
   d.amoled = s.amoled ? 'on' : 'off'; d.radius = s.posterRadius || 'classic'; d.labels = s.posterLabels === false ? 'off' : 'on'; d.landscape = s.landscape ? 'on' : 'off';
+  d.couch = localStorage.getItem('couch') === 'on' ? 'on' : 'off';
   const m = s.accent === 'custom' && /^#([0-9a-f]{6})$/i.exec(s.accentHex || '');
   if (m) { const n = parseInt(m[1], 16), st = document.documentElement.style; st.setProperty('--tungsten', s.accentHex); st.setProperty('--glow', (n >> 16) + ' ' + (n >> 8 & 255) + ' ' + (n & 255)); } } catch {}</script>
 </head>

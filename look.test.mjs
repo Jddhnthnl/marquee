@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -120,4 +120,13 @@ assert.deepEqual(rc.titles.map((t) => [t.id, t.type, t.minutes, t.episodes, t.fi
 assert.deepEqual([rc.minutes, rc.episodes, rc.movies, rc.busiest, rc.genre], [235, 2, 1, 6, 'Drama'], 'totals; busiest is July (130) over March (105); Drama on both');
 assert.deepEqual(recap([]), { minutes: 0, titles: [], episodes: 0, movies: 0, busiest: null, genre: null }, 'empty year');
 assert.deepEqual([hoursMin(45), hoursMin(60), hoursMin(135)], ['45 min', '1 h', '2 h 15 min']);
+// couch mode focus: rects as {left, top, right, bottom}
+const R = (left, top, w, h) => ({ left, top, right: left + w, bottom: top + h });
+const tile = R(0, 0, 100, 150), shelf = [R(114, 0, 100, 150), R(0, 200, 100, 150), R(228, 0, 100, 150)];
+assert.equal(nearest(tile, shelf, 'right'), 0, 'next poster in the row, not the one after');
+assert.equal(nearest(tile, shelf, 'down'), 1, 'poster in the next row');
+assert.equal(nearest(tile, shelf, 'left'), -1, 'nothing to the left');
+assert.equal(nearest(tile, [tile, ...shelf], 'up'), -1, 'never itself');
+const link = R(0, 0, 100, 50);
+assert.equal(nearest(link, [R(600, 60, 100, 50), R(0, 200, 100, 50)], 'down'), 1, 'straight below beats a nearer item far to the side');
 console.log('look tests pass');

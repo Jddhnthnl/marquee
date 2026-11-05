@@ -160,3 +160,25 @@ export function recap(entries, genresOf = () => []) {
     busiest: minutes ? months.indexOf(Math.max(...months)) : null, genre: Object.entries(genres).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null };
 }
 export const hoursMin = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`);
+
+// Couch mode's arrow keys: index of the rect focus moves to from `from` going `dir` (up/down/left/right), or -1.
+// Rects are DOMRect-like; only rects wholly past from's edge count (1px slack for touching tiles).
+export function nearest(from, rects, dir) {
+  const mid = (r) => [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+  const [fx, fy] = mid(from);
+  let best = -1, low = Infinity;
+  rects.forEach((r, i) => {
+    const ahead = { up: r.bottom <= from.top + 1, down: r.top >= from.bottom - 1, left: r.right <= from.left + 1, right: r.left >= from.right - 1 }[dir];
+    if (!ahead) return;
+    const [x, y] = mid(r), vertical = dir === 'up' || dir === 'down';
+    const s = focusScore(Math.abs(vertical ? y - fy : x - fx), Math.abs(vertical ? x - fx : y - fy));
+    if (s < low) { low = s; best = i; }
+  });
+  return best;
+}
+
+// along: how far the candidate is in the arrow's direction; across: how far it sits off that line (both px, centre to centre).
+// Lower wins. The weighting decides whether Down from a nav link jumps to a close item far to the side or the item straight below.
+function focusScore(along, across) {
+  return along + 2 * across; // sideways counts double, so focus stays in its row or column
+}

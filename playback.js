@@ -70,11 +70,20 @@ const re = (src) => { try { return src ? new RegExp(src, 'i') : null; } catch { 
 const text = (s) => `${s.name ?? ''} ${s.title ?? ''} ${s.description ?? ''}`;
 
 // mode 'reuse' replays last.stream (the link that played this video before), else behaves like 'auto'; 'ask' never picks.
+// Links that failed in the last 7 days (dead) are skipped; null when nothing else is left.
 // Auto: same release group as the last episode, else streams passing every rule (all of them if none pass), best quality first.
-export function chooseStream({ mode, quality, last, groups, bingeGroup = null, rules = [], custom = '', sameGroup = true }) {
+// Dead links: { url: failedAtMs }, kept per PC for 7 days. A dead stream is never auto-picked; the list shows it last, dimmed.
+export const DEAD_MS = 7 * 864e5;
+export const deadAt = (dead, s, now = Date.now()) => { const t = dead?.[s?.url]; return t && now - t < DEAD_MS ? t : 0; };
+export function failedLabel(t, now = Date.now()) {
+  const m = Math.max(1, Math.round((now - t) / 6e4));
+  return `Failed ${m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`} ago`;
+}
+
+export function chooseStream({ mode, quality, last, groups, bingeGroup = null, rules = [], custom = '', sameGroup = true, dead = {} }) {
   if (mode === 'ask') return null;
-  if (mode === 'reuse' && last?.stream?.url) return last.stream;
-  const all = groups.flatMap((g) => g.streams).filter((s) => s.url); // torrents and external links can't auto-play
+  if (mode === 'reuse' && last?.stream?.url && !deadAt(dead, last.stream)) return last.stream;
+  const all = groups.flatMap((g) => g.streams).filter((s) => s.url && !deadAt(dead, s)); // torrents and external links can't auto-play
   const same = sameGroup && bingeGroup && all.find((s) => s.behaviorHints?.bingeGroup === bingeGroup);
   if (same) return same;
   const tests = [...rules.filter((k) => RULES[k]).map((k) => [re(RULES[k][1]), RULES[k][2]]), [re(custom), false]].filter(([r]) => r);

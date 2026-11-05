@@ -1,6 +1,6 @@
 // node playback.test.mjs
 import assert from 'node:assert/strict';
-import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes } from './playback.js';
+import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes, deadAt, failedLabel, DEAD_MS } from './playback.js';
 
 const s = (name, url, bingeGroup) => ({ name, url, behaviorHints: bingeGroup ? { bingeGroup } : {} });
 const groups = [{ addonName: 'A', streams: [s('720p WEB', 'u720'), s('1080p WEB', 'u1080', 'grp'), s('2160p 4K', 'u2160')] }];
@@ -14,6 +14,17 @@ assert.equal(chooseStream({ mode: 'auto', quality: '720p', groups, bingeGroup: '
 assert.equal(chooseStream({ mode: 'auto', quality: '480p', groups }).url, 'u720', 'unknown quality: first playable');
 assert.equal(chooseStream({ mode: 'ask', quality: '1080p', last, groups }), null, 'ask never picks');
 assert.equal(chooseStream({ mode: 'auto', quality: '1080p', groups: [{ streams: [{ infoHash: 'x' }] }] }), null, 'torrents are never picked');
+
+// dead links: skipped for 7 days, then eligible again
+const now = Date.now(), dead = { u1080: now - 1000, uOld: now - 1000, u2160: now - DEAD_MS - 1 };
+assert.equal(chooseStream({ mode: 'auto', quality: '1080p', groups, dead }).url, 'u720', 'a dead link is never auto-picked');
+assert.equal(chooseStream({ mode: 'auto', quality: '720p', groups, bingeGroup: 'grp', dead }).url, 'u720', 'a dead same-group link is skipped too');
+assert.equal(chooseStream({ mode: 'reuse', quality: '2160p', last, groups, dead }).url, 'u2160', 'a dead saved link is not reused; expired entries count as alive');
+assert.equal(chooseStream({ mode: 'auto', quality: '1080p', groups, dead: { u720: now, u1080: now, u2160: now } }), null, 'all dead: nothing to pick');
+assert.equal(deadAt(dead, { url: 'u2160' }, now), 0, 'expired after 7 days');
+assert.equal(failedLabel(now - 30e3, now), 'Failed 1 min ago');
+assert.equal(failedLabel(now - 2 * 36e5, now), 'Failed 2 h ago');
+assert.equal(failedLabel(now - 3 * 864e5, now), 'Failed 3 d ago');
 
 // skip segments: real response shapes captured 2026-11-04
 const introdb = { intro: { start_sec: 314.5, end_sec: 331 }, recap: null, outro: { start_sec: 2843, end_sec: 2901 } };

@@ -170,6 +170,7 @@
   .skip, .upnext { position: fixed; right: 30px; bottom: 150px; transition: bottom .4s cubic-bezier(.2,.8,.2,1); }
   body.idle .skip, body.idle .upnext { bottom: 40px; }
   .skip { display: flex; align-items: center; gap: 10px; }
+  #switched { bottom: 214px; }
   .skip[hidden], .upnext[hidden], .still[hidden] { display: none; }
   .pill { min-height: 48px; padding: 0 22px; border: 1px solid rgba(237,230,216,.5); border-radius: 999px; background: rgba(20,32,42,.82);
     font-weight: 700; cursor: pointer; }
@@ -261,6 +262,7 @@
 
 <section id="watching" aria-live="polite"></section>
 
+<div class="skip" id="switched" hidden><span class="note" role="status"></span><button class="pill">Undo</button></div>
 <div class="skip" id="skip" hidden><span class="note" id="skip-note" role="status"></span><button class="pill" id="skip-btn"></button></div>
 <aside class="upnext" id="upnext" hidden aria-label="Next episode">
   <div class="thumb" id="up-thumb"></div><b id="up-label"></b><p id="up-title"></p>
@@ -301,7 +303,8 @@ function trackName(t) {
 
 function render(k) {
   // another file is starting: forget the last one's end, chapters and length, or its end-of-file would close the player
-  if (k === 'start-file') Object.assign(s, { 'eof-reached': false, 'chapter-list': [], duration: 0, 'time-pos': 0 });
+  if (k === 'start-file') { Object.assign(s, { 'eof-reached': false, 'chapter-list': [], duration: 0, 'time-pos': 0 }); moved = Date.now(); stallSent = false; }
+  if (k === 'time-pos') moved = Date.now();
   const dur = s.duration || 0, pos = s['time-pos'] || 0;
   if (k === 'pause') {
     icon($('#pp'), s.pause ? 'play' : 'pause');
@@ -415,6 +418,20 @@ function setFit(k, say) {
 // What's playing, from Marquee's main page: details, episodes, sources
 let info = {}, panel = null, epSeason = null, pic = { brightness: 0, contrast: 0, saturation: 0, gamma: 0, deband: false };
 const ask = (req) => window.__TAURI__.event.emitTo('main', 'player-request', req);
+
+// Dead link: 20 s without the picture moving (and not paused by you) asks Marquee to switch streams, once per file
+let moved = Date.now(), stallSent = false, switchTimer;
+setInterval(() => {
+  if (s.pause || s['eof-reached'] || stallSent) { moved = Date.now(); return; }
+  if (Date.now() - moved > 20000) { stallSent = true; ask({ type: 'stall' }); }
+}, 1000);
+function showSwitched(text) {
+  const b = $('#switched');
+  b.querySelector('.note').textContent = text;
+  b.querySelector('button').onclick = () => { b.hidden = true; ask({ type: 'undo-switch' }); };
+  b.hidden = false;
+  clearTimeout(switchTimer); switchTimer = setTimeout(() => (b.hidden = true), 10000);
+}
 let subChosen = false, audioChosen = false; // you picked a track yourself: stop choosing for you until the next episode
 function applySubs() {
   const o = opt(), tracks = s['track-list'];
@@ -720,6 +737,7 @@ addEventListener('blur', () => { if (held != null) { cmd('set_property', 'speed'
   applyInfo(await invoke('player_info'));
   await window.__TAURI__.event.listen('player-info', ({ payload }) => applyInfo(payload));
   await window.__TAURI__.event.listen('player-notice', ({ payload }) => toast(payload, 2600));
+  await window.__TAURI__.event.listen('player-switched', ({ payload }) => showSwitched(payload));
   const vol = localStorage.getItem('player_volume');
   if (vol !== null) cmd('set_property', 'volume', +vol);
   if (!started) setFit(fit);

@@ -110,10 +110,14 @@ fn session(app: &AppHandle, url: &str, title: &str, start: f64, headers: &[Strin
         }
         let _ = app.emit_to("player", "mpv", json!({ "name": name, "data": v }));
     });
-    let _ = child.wait();
+    let status = child.wait();
     *player.cmd.lock().unwrap() = None;
     let p = player.props.lock().unwrap();
     let f = |k: &str| p.get(k).and_then(Value::as_f64);
+    // mpv exits with 2 when the file couldn't be loaded; the app remembers that link as dead (wording matched in app.js)
+    if f("duration").is_none() && matches!(status, Ok(s) if s.code() == Some(2)) {
+        return Err("That stream didn't open. The link may be dead.".into());
+    }
     Ok((f("time-pos").unwrap_or(start), f("duration").unwrap_or(0.0)))
 }
 

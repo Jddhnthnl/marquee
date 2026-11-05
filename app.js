@@ -1,5 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes } from './playback.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel } from './playback.js';
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
@@ -437,7 +437,15 @@ function extras(meta, type, set) {
   }, () => {});
 }
 
-const pickRules = (set) => ({ rules: set.rules, custom: set.customRule, sameGroup: set.sameGroup });
+const pickRules = (set) => ({ rules: set.rules, custom: set.customRule, sameGroup: set.sameGroup, dead: deadLinks() });
+// Links that failed on this PC, { url: failedAtMs }. Not synced: a link dead here may work on another network.
+const deadLinks = () => load('dead_links', {});
+function markDead(url, on = true) {
+  const now = Date.now(), d = Object.fromEntries(Object.entries(deadLinks()).filter(([, t]) => now - t < DEAD_MS));
+  if (on) d[url] = now; else delete d[url];
+  save('dead_links', d);
+}
+const LINK_DEAD = /didn't open|link may not work/; // play_mpv errors that mean the link failed, not mpv or the app
 async function streams(meta, type, videoId, ep, autoplay = false) {
   const box = $('#streams');
   const targets = activeAddons().filter((a) => supports(a.manifest, 'stream', type, videoId));
@@ -457,11 +465,13 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
     try {
       const { streams: list = [] } = await getJson(resourceUrl(a.url, 'stream', type, videoId));
       groups[i] = { addonName: a.manifest.name, streams: list };
-      el.innerHTML = list.length ? `<ul class="stream-list">${list.map((s, j) => {
-        const t = streamTarget(s);
-        return `<li style="--i:${Math.min(j, 10)}"><button class="stream" data-j="${j}"><span class="stream-name">${esc(s.name || a.manifest.name)}</span>
+      const dead = deadLinks(), now = Date.now(), died = list.map((s) => deadAt(dead, s, now));
+      const order = list.map((_, j) => j).sort((x, y) => !!died[x] - !!died[y]); // failed links go last, still clickable
+      el.innerHTML = list.length ? `<ul class="stream-list">${order.map((j, n) => {
+        const s = list[j], t = streamTarget(s);
+        return `<li style="--i:${Math.min(n, 10)}"><button class="stream${died[j] ? ' dead' : ''}" data-j="${j}"><span class="stream-name">${esc(s.name || a.manifest.name)}</span>
           <span class="stream-desc">${esc(s.title || s.description).replace(/\n/g, '<br>')}</span>
-          <span class="stream-kind">${t?.kind === 'url' ? 'Plays here' : t?.kind === 'magnet' ? 'Torrent' : 'Opens elsewhere'}</span></button></li>`;
+          <span class="stream-kind">${died[j] ? failedLabel(died[j], now) : t?.kind === 'url' ? 'Plays here' : t?.kind === 'magnet' ? 'Torrent' : 'Opens elsewhere'}</span></button></li>`;
       }).join('')}</ul>` : state('No streams from this addon.');
       el.querySelectorAll('.stream').forEach((b) => (b.onclick = () => play(ctx, list[b.dataset.j])));
     } catch (e) { el.innerHTML = state(`${esc(a.manifest.name)} didn't respond (${esc(e.message)}).`, 'error'); }
@@ -473,8 +483,14 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
   } else await all;
   if (!box.isConnected) return; // you left this title while the lists loaded: don't start playing it
   const last = Object.values(progress()).filter((p) => p.metaId === meta.id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const best = chooseStream({ mode: 'auto', quality: set.quality, groups: groups.filter(Boolean), bingeGroup: last?.bingeGroup ?? null, ...pickRules(set) });
-  if (autoplay && set.streamMode !== 'ask' && best && !(reused && await reused)) return void play(ctx, best);
+  const pick = () => chooseStream({ mode: 'auto', quality: set.quality, groups: groups.filter(Boolean), bingeGroup: last?.bingeGroup ?? null, ...pickRules(set) });
+  if (autoplay && set.streamMode !== 'ask' && !(reused && await reused)) {
+    // Up to 3 streams: a link that fails to open is remembered as dead, so the next pick skips it. Then the list, failed ones dimmed.
+    let tries = 0;
+    for (let s; tries < 3 && (s = pick()); tries++) if (await play(ctx, s, true) || !deadAt(deadLinks(), s)) return; // played, or you closed it
+    if (tries && box.isConnected) return void streams(meta, type, videoId, ep);
+  }
+  const best = pick();
   if (best && $('#best-slot')) {
     $('#best-slot').innerHTML = '<button id="best" class="btn primary">Play best match</button>';
     $('#best').onclick = () => play(ctx, best);
@@ -551,8 +567,10 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
     const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers, embed });
     ok = dur > 0;
     if (ok) { record(playing.ctx, playing.stream, pos, dur); logSession(playing.ctx, playing.from, pos, playing.since); }
+    if (ok && deadLinks()[playing.stream.url]) markDead(playing.stream.url, false); // it works again
   } catch (e) {
     logLine('error', ['play failed:', String(e)]);
+    if (LINK_DEAD.test(String(e))) markDead(playing.stream.url); // after a switch the failing link is the current one
     if (!quiet) reportDialog({ url: href, error: String(e) });
   }
   const pick = playing.pickEpisode;
@@ -621,6 +639,25 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
   const snap = await tauri.core.invoke('mpv_state');
   if (!playing) return; // the player closed while we asked
   if (snap.duration > 0) record(playing.ctx, playing.stream, snap['time-pos'] ?? 0, snap.duration);
+  if (r.type === 'stall') { // 20 s without picture: remember the link as dead and move to the next-best stream at the same spot
+    markDead(playing.stream.url);
+    const set = settings(), tries = (playing.tries ?? 0) + 1, pos = snap['time-pos'] ?? playing.from;
+    const s = tries < 3 && chooseStream({ mode: 'auto', quality: set.quality, groups: playing.groups.filter(Boolean), bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null, ...pickRules(set) });
+    if (!s) { // 3 streams failed, or none left: close and show the list with the failed ones dimmed
+      playing.pickEpisode = { type: playing.type, metaId: playing.meta.id, videoId: playing.ctx.videoId };
+      return tauri.core.invoke('mpv_cmd', { args: ['quit'] });
+    }
+    const was = playing.stream;
+    await swap(playing.ctx, s, playing.groups, pos, 'Switched to another stream');
+    Object.assign(playing, { tries, undo: { stream: was, pos } });
+    return tauri.event.emitTo('player', 'player-switched', 'That stream stalled, so Marquee switched to another');
+  }
+  if (r.type === 'undo-switch') { // you'd rather wait for the stalled stream: it's not dead after all
+    const u = playing.undo;
+    if (!u) return;
+    markDead(u.stream.url, false);
+    return swap(playing.ctx, u.stream, playing.groups, snap['time-pos'] ?? u.pos);
+  }
   if (r.type === 'source') {
     const [gi, si] = r.key.split(':').map(Number);
     const s = playing.groups.filter(Boolean)[gi]?.streams[si];
@@ -646,7 +683,7 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
     swap(ctx, s, groups, resumeAt(progress()[ep.id]));
   }
 
-  async function swap(ctx, s, groups, start) {
+  async function swap(ctx, s, groups, start, say) {
     const t = streamTarget(s);
     if (t?.kind !== 'url') return notify('That source is a torrent or external link, so it can’t play here.');
     const title = mediaTitle(ctx);
@@ -657,8 +694,8 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
       logSession(playing.ctx, playing.from, snap['time-pos'] ?? 0, playing.since);
       Object.assign(playing, { from: start, since: Date.now() });
     }
-    Object.assign(playing, { ctx, stream: s, groups, segments: [], started: Math.floor(Date.now() / 1000) });
-    notify(`Playing ${title}`);
+    Object.assign(playing, { ctx, stream: s, groups, segments: [], started: Math.floor(Date.now() / 1000), tries: 0, undo: null });
+    if (!say) notify(`Playing ${title}`);
     sendPlayerInfo();
     loadSegments(ctx);
   }

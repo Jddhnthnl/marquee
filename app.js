@@ -600,6 +600,11 @@ function sendPlayerInfo() {
   } });
 }
 
+// Every enabled addon's stream list for one video, as { addonName, streams }; a failing addon is left out.
+const streamGroups = async (type, id) => (await Promise.all(activeAddons().filter((a) => supports(a.manifest, 'stream', type, id))
+  .map((a) => getJson(resourceUrl(a.url, 'stream', type, id)).then((j) => ({ addonName: a.manifest.name, streams: j.streams || [] }), () => null))))
+  .filter(Boolean);
+
 // Requests from the player's Episodes and Sources panels
 tauri?.event.listen('player-request', async ({ payload: r }) => {
   if (!playing) return;
@@ -607,6 +612,11 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
   if (r.type === 'settings') { // Style panel in the player: only subtitle keys, only the types the defaults have
     for (const [k, v] of Object.entries(r.patch ?? {})) if (k.startsWith('sub') && typeof v === typeof PLAYBACK_DEFAULTS[k]) setSetting(k, v);
     return sendPlayerInfo();
+  }
+  if (r.type === 'prefetch') { // near the end: load the next episode's stream lists now so the switch is instant.
+    // Lists only: a Torrentio /resolve/ link is opened by mpv on play, which is when TorBox adds the torrent.
+    if (settings().streamMode !== 'ask' && playing.pre?.id !== r.id) playing.pre = { id: r.id, groups: streamGroups(playing.type, r.id) };
+    return;
   }
   const snap = await tauri.core.invoke('mpv_state');
   if (!playing) return; // the player closed while we asked
@@ -626,10 +636,8 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
       playing.pickEpisode = { type, metaId: meta.id, videoId: ep.id };
       return tauri.core.invoke('mpv_cmd', { args: ['quit'] });
     }
-    notify(`Finding a stream for ${epLabel(ctx.season, ctx.episode)}`);
-    const groups = (await Promise.all(activeAddons().filter((a) => supports(a.manifest, 'stream', type, ep.id))
-      .map((a) => getJson(resourceUrl(a.url, 'stream', type, ep.id)).then((j) => ({ addonName: a.manifest.name, streams: j.streams || [] }), () => null))))
-      .filter(Boolean);
+    if (playing.pre?.id !== ep.id) notify(`Finding a stream for ${epLabel(ctx.season, ctx.episode)}`);
+    const groups = await (playing.pre?.id === ep.id ? playing.pre.groups : streamGroups(type, ep.id));
     if (!playing) return; // closed while the stream lists loaded
     // shortcut: a reused link that has died isn't detected mid-player (mpv just ends); the details page path does fall back
     const s = chooseStream({ mode: set.streamMode, quality: set.quality, last: progress()[ep.id], groups, bingeGroup: playing.stream.behaviorHints?.bingeGroup ?? null, ...pickRules(set) })

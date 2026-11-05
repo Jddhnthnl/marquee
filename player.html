@@ -340,8 +340,8 @@ function render(k) {
 
 // Skip intro/recap and the next-episode card, driven by the Playback settings Marquee sends in info.settings
 const opt = () => ({ ...PLAYBACK_DEFAULTS, ...info.settings });
-let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer; // card: none | shown | done
-function newEpisode() { subChosen = audioChosen = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
+let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer, prefetched = false; // card: none | shown | done
+function newEpisode() { subChosen = audioChosen = false; prefetched = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
 const segs = () => (info.segments?.length ? info.segments : fromChapters(s['chapter-list'], s.duration));
 const nextEp = () => info.next && (info.episodes || []).find((e) => e.id === info.next);
 function timeline() {
@@ -364,6 +364,7 @@ function timeline() {
   };
   const at = nextCardAt(segs(), s.duration, o.nextWhen);
   if (card === 'shown' && pos < at - 1) hideCard('none'); // seeked back before the credits
+  if (!prefetched && nextEp() && o.nextDelay > 0 && at != null && pos >= at - 60) { prefetched = true; ask({ type: 'prefetch', id: info.next }); }
   if (card === 'none' && nextEp() && o.nextDelay > 0 && at != null && pos >= at) showCard(o.nextDelay);
   if (s['eof-reached']) { // keep-open: mpv holds the last frame instead of closing
     if (card === 'shown') playNext(true);

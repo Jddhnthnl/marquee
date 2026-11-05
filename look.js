@@ -187,6 +187,14 @@ export async function pinHash(pin, salt) {
 // Wrong tries in a row -> ms to wait before the next one: 30 s after every 5th.
 export const pinWait = (fails) => (fails > 0 && fails % 5 === 0 ? 30000 : 0);
 
+// Downloads: the file name for a title or episode, safe on Windows ("Breaking Bad S01E02"). The extension comes from the server.
+const pad2 = (n) => String(n).padStart(2, '0');
+export const dlName = (ctx) => `${ctx.name ?? ''}${ctx.season != null ? ` S${pad2(ctx.season)}E${pad2(ctx.episode)}` : ''}`
+  .replace(/[<>:"/\|?*\x00-\x1f]/g, '').replace(/[. ]+$/, '').trim().slice(0, 120) || 'video';
+// The queue runs one at a time, oldest first: the item to start now, or null.
+export const dlNext = (list) => (list.some((d) => d.state === 'running') ? null : list.find((d) => d.state === 'queued') ?? null);
+export const fmtSize = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
+
 // along: how far the candidate is in the arrow's direction; across: how far it sits off that line (both px, centre to centre).
 // Lower wins. The weighting decides whether Down from a nav link jumps to a close item far to the side or the item straight below.
 function focusScore(along, across) {

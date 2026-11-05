@@ -257,6 +257,19 @@
   .stream-desc { grid-column: 1; color: var(--usher); font-size: .86rem; line-height: 1.4; overflow-wrap: anywhere; }
   .stream-kind { grid-column: 2; grid-row: 1; font-size: .8rem; color: var(--usher); }
   .stream.dead { opacity: .55; }
+  .stream-list li:has(.dl-one) { display: flex; gap: 6px; }
+  .dl-one { flex: none; width: 44px; display: grid; place-items: center; border: 0; border-radius: var(--r); background: var(--aisle); color: var(--usher); cursor: pointer; }
+  .dl-one:hover, .dl-one:focus-visible { background: var(--aisle-2); color: var(--screen); }
+  .dl-one svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .dls { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+  .dls li { display: flex; align-items: center; gap: 14px; padding: 10px 14px 10px 10px; border-radius: var(--r); background: var(--aisle); }
+  .dls img { flex: none; width: 46px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 3px; background: var(--seat); }
+  .dl-body { flex: 1; min-width: 0; display: grid; gap: 6px; }
+  .dl-title { color: var(--screen); font-weight: 700; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-title:hover { text-decoration: underline; }
+  .dls progress { width: 100%; height: 4px; accent-color: var(--tungsten); }
+  .dl-state { color: var(--usher); font-size: .85rem; }
+  .dl-acts { display: flex; gap: 6px; flex: none; }
 
   /* ---- addons ---- */
   .install { margin: 28px 0 8px; }

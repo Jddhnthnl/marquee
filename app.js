@@ -4,7 +4,7 @@ import { push, drop, watch, signIn, signUp, resetPassword, checkPassword, signOu
 import { deviceCode, deviceLink, sync as traktPull, addHistory, revoke } from './trakt.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait, dlName, dlNext, fmtSize } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -354,7 +354,7 @@ async function details(type, id, pickVid) {
   app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>${account ? '<button class="btn" id="send">Send to a friend</button>' : ''}` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${esc(s)}">Season ${esc(s)}</button>`).join('')}</div>
-        <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button></p><ol class="ep-list" id="eps"></ol>
+        <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button>${tauri ? '<button class="btn quiet" id="dlseason">Download season</button>' : ''}</p><ol class="ep-list" id="eps"></ol>
         <details class="show-prefs"><summary>Playback for this show</summary><div id="show-prefs"></div></details></section>` : ''}
       <section class="streams" id="streams"></section>
     </div><div id="extras"></div>`;
@@ -404,6 +404,18 @@ async function details(type, id, pickVid) {
     }));
   };
   paintShow();
+  if ($('#dlseason')) $('#dlseason').onclick = async ({ currentTarget: b }) => {
+    const want = eps.filter((v) => v.season === shown && (!v.released || Date.parse(v.released) <= Date.now()) && !dlOf(v.id)), set = settings();
+    b.disabled = true; b.textContent = 'Finding streams…';
+    let added = 0;
+    for (const v of want) { // one by one: they queue in episode order, and the addons aren't hit all at once
+      const groups = (await streamGroups(type, v.id)).map((g) => ({ ...g, streams: g.streams.filter((x) => x.url) }));
+      const s = chooseStream({ mode: 'auto', quality: set.quality, groups, ...pickRules(set) });
+      if (s && queueDownload({ metaId: meta.id, type, name: meta.name, poster: meta.poster, background: meta.background, videoId: v.id, season: v.season, episode: v.episode ?? v.number }, s)) added++;
+    }
+    b.disabled = false;
+    b.textContent = !want.length ? 'Already in Downloads' : added === want.length ? `${added} queued` : `${added} of ${want.length} queued (no stream for the rest)`;
+  };
   $('#shuffle').onclick = () => {
     const out = eps.filter((v) => !v.released || Date.parse(v.released) <= Date.now());
     const v = out[Math.floor(Math.random() * out.length)];
@@ -493,9 +505,10 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
   const ctx = { metaId: meta.id, type, name: meta.name, poster: meta.poster, background: meta.background, videoId, season: ep?.season, episode: epNo };
   const groups = [];
   shelf = { meta, type, groups }; // the player's Sources/Episodes/Info come from what this page loaded
-  const set = settings(), saved = progress()[videoId];
+  const set = settings(), saved = progress()[videoId], dl = tauri && dlOf(videoId)?.state === 'done' ? dlOf(videoId) : null;
+  // A finished download plays first; if its file is gone, the usual pick below takes over.
   // Reuse: the saved link plays at once; if it no longer works, fall through to the pick below once the lists load
-  const reused = autoplay && set.streamMode === 'reuse' && saved?.stream?.url ? play(ctx, saved.stream, true) : null;
+  const reused = autoplay && dl ? play(ctx, dl.stream, true, dl.file) : autoplay && set.streamMode === 'reuse' && saved?.stream?.url ? play(ctx, saved.stream, true) : null;
   const loads = targets.map(async (a, i) => { // Nuvio fans out to every addon in parallel, grouped by addon in install order
     const el = $(`#g${i}`);
     try {
@@ -507,9 +520,13 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
         const s = list[j], t = streamTarget(s);
         return `<li style="--i:${Math.min(n, 10)}"><button class="stream${died[j] ? ' dead' : ''}" data-j="${j}"><span class="stream-name">${esc(s.name || a.manifest.name)}</span>
           <span class="stream-desc">${esc(s.title || s.description).replace(/\n/g, '<br>')}</span>
-          <span class="stream-kind">${died[j] ? failedLabel(died[j], now) : t?.kind === 'url' ? 'Plays here' : t?.kind === 'magnet' ? 'Torrent' : 'Opens elsewhere'}</span></button></li>`;
+          <span class="stream-kind">${died[j] ? failedLabel(died[j], now) : t?.kind === 'url' ? 'Plays here' : t?.kind === 'magnet' ? 'Torrent' : 'Opens elsewhere'}</span></button>${tauri && t?.kind === 'url' ? `<button class="dl-one" data-dlj="${j}" title="Download" aria-label="Download this stream">${DL_ICON}</button>` : ''}</li>`;
       }).join('')}</ul>` : state('No streams from this addon.');
       el.querySelectorAll('.stream').forEach((b) => (b.onclick = () => play(ctx, list[b.dataset.j])));
+      el.querySelectorAll('.dl-one').forEach((b) => (b.onclick = () => {
+        b.title = queueDownload(ctx, list[b.dataset.dlj]) ? 'Added to Downloads' : 'Already in Downloads';
+        b.setAttribute('aria-label', b.title); b.innerHTML = DONE_ICON;
+      }));
     } catch (e) { el.innerHTML = state(`${esc(a.manifest.name)} didn't respond (${esc(e.message)}).`, 'error'); }
   });
   const all = Promise.all(loads);
@@ -527,13 +544,16 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
     if (tries && box.isConnected) return void streams(meta, type, videoId, ep);
   }
   const best = pick();
-  if (best && $('#best-slot')) {
+  if (dl && $('#best-slot')) {
+    $('#best-slot').innerHTML = '<button id="best" class="btn primary">Play download</button>';
+    $('#best').onclick = () => play(ctx, dl.stream, false, dl.file);
+  } else if (best && $('#best-slot')) {
     $('#best-slot').innerHTML = '<button id="best" class="btn primary">Play best match</button>';
     $('#best').onclick = () => play(ctx, best);
   }
 }
 
-function play(ctx, stream, quiet = false) {
+function play(ctx, stream, quiet = false, file = null) { // file: a finished download plays instead of the link
   const t = streamTarget(stream);
   if (!t) return alert('This stream has no link to play.');
   if (t.kind !== 'url') { // shortcut: no torrent engine / external player bridge in a browser; Nuvio uses a native engine + libmpv
@@ -542,8 +562,8 @@ function play(ctx, stream, quiet = false) {
   const key = ctx.videoId;
   const saved = progress()[key];
   const how = settings().player;
-  if (tauri && how === 'external') return tauri.core.invoke('open_external', { path: settings().externalPath, url: t.href }).then(() => true, (e) => (alert(e), false));
-  if (tauri) return playMpv(ctx, stream, t.href, saved, how !== 'mpv', quiet);
+  if (tauri && how === 'external') return tauri.core.invoke('open_external', { path: settings().externalPath, url: file ?? t.href }).then(() => true, (e) => (alert(e), false));
+  if (tauri) return playMpv(ctx, stream, file ?? t.href, saved, how !== 'mpv', quiet);
   const ov = document.createElement('div');
   ov.className = 'player';
   ov.setAttribute('role', 'dialog');
@@ -623,6 +643,7 @@ const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
   .sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
 
 async function playMpv(ctx, stream, href, saved, embed, quiet) {
+  const local = href !== stream.url ? stream : null; // a download: its file failing is no reason to mark the link dead
   playing = { ...shelf, ctx, stream, segments: [], started: Math.floor(Date.now() / 1000), from: resumeAt(saved), since: Date.now() };
   lastHref = href;
   const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
@@ -636,7 +657,7 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
     if (ok && deadLinks()[playing.stream.url]) markDead(playing.stream.url, false); // it works again
   } catch (e) {
     logLine('error', ['play failed:', String(e)]);
-    if (LINK_DEAD.test(String(e))) markDead(playing.stream.url); // after a switch the failing link is the current one
+    if (LINK_DEAD.test(String(e)) && playing.stream !== local) markDead(playing.stream.url); // after a switch the failing link is the current one
     if (!quiet) reportDialog({ url: href, error: String(e) });
   }
   const pick = playing.pickEpisode;
@@ -647,6 +668,92 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
   else if (h || ok || !quiet) route(); // same hash fires no hashchange, so redraw by hand
   return ok;
 }
+
+// ---------- downloads (desktop app): one at a time, oldest first; the list and the files stay on this PC ----------
+// { id: '<profile>|<videoId>', pid, ctx, stream, name, dir, state: queued|running|paused|failed|done, file, got, total, error }
+const downloads = () => load('downloads', []);
+const saveDl = (list) => localStorage.setItem('downloads', JSON.stringify(list)); // not a synced key: the files are on this PC
+const editDl = (id, patch) => saveDl(downloads().map((d) => (d.id === id ? { ...d, ...patch } : d)));
+const dlOf = (videoId) => downloads().find((d) => d.id === `${pid()}|${videoId}`);
+const dlLive = {}; // id -> { got, total } from Rust while it runs
+const DL_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+const DONE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
+const partOf = (d) => `${d.dir}\\${d.name}.part`;
+function queueDownload(ctx, stream) {
+  const id = `${pid()}|${ctx.videoId}`, list = downloads(), old = list.find((d) => d.id === id);
+  if (old && old.state !== 'failed') return false; // already waiting, running, paused or done
+  if (old?.dir && old.stream.url !== stream.url) tauri.core.invoke('dl_delete', { path: partOf(old) }).catch(() => {}); // another file: don't resume into it
+  let name = dlName(ctx), n = 1;
+  while (list.some((d) => d.id !== id && d.name === name)) name = `${dlName(ctx)} (${++n})`; // another profile's copy of the same title
+  const { url, name: sn, title, behaviorHints } = stream;
+  saveDl([...list.filter((d) => d.id !== id), { id, pid: pid(), ctx, stream: { url, name: sn, title, behaviorHints }, name, state: 'queued', got: 0, total: 0 }]);
+  pumpDownloads();
+  return true;
+}
+let pumping = false; // between picking the next one and marking it running
+async function pumpDownloads() {
+  const d = !pumping && dlNext(downloads());
+  if (!d) return;
+  pumping = true;
+  const dir = d.dir ?? localStorage.getItem('dl_dir') ?? await tauri.core.invoke('video_dir');
+  editDl(d.id, { state: 'running', dir, error: '' });
+  pumping = false;
+  dlRepaint();
+  const headers = Object.entries(d.stream.behaviorHints?.proxyHeaders?.request ?? {}).map(([k, v]) => `${k}: ${v}`);
+  try {
+    const file = await tauri.core.invoke('dl_start', { id: d.id, url: d.stream.url, headers, dir, name: d.name });
+    const size = dlLive[d.id]?.total ?? 0;
+    if (downloads().some((x) => x.id === d.id)) editDl(d.id, { state: 'done', file, got: size, total: size });
+    else tauri.core.invoke('dl_delete', { path: file }); // cancelled in its last second
+  } catch (e) {
+    const cur = downloads().find((x) => x.id === d.id), live = dlLive[d.id] ?? {};
+    if (!cur) tauri.core.invoke('dl_delete', { path: partOf({ ...d, dir }) }).catch(() => {}); // cancelled while running
+    else editDl(d.id, { state: String(e) === 'stopped' ? 'paused' : 'failed', error: String(e), got: live.got ?? cur.got, total: live.total ?? cur.total });
+  }
+  delete dlLive[d.id];
+  dlRepaint();
+  pumpDownloads();
+}
+const pct = (d) => (d.total ? Math.floor((d.got / d.total) * 100) : 0);
+const dlStatus = (d) => ({ queued: 'Waiting', running: d.total ? `Downloading · ${pct(d)}% of ${fmtSize(d.total)}` : 'Starting…',
+  paused: `Paused${d.total ? ` at ${pct(d)}%` : ''}`, failed: `Didn’t finish: ${d.error}`, done: `On this PC${d.total ? ` · ${fmtSize(d.total)}` : ''}` })[d.state];
+const dlRepaint = () => { if (location.hash === '#/library/downloads') downloadsView(); }; // on state changes only; progress ticks update in place
+function downloadsView() {
+  const list = downloads().filter((d) => d.pid === pid()).reverse(); // newest first
+  const btn = (act, label, cls = 'quiet') => `<button class="btn ${cls}" data-act="${act}">${label}</button>`;
+  app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>${LIB_TABS('downloads')}
+    ${list.length ? `<ul class="dls">${list.map((d) => { const x = { ...d, ...dlLive[d.id] }; return `<li data-dl="${esc(d.id)}">
+      <img src="${esc(d.ctx.poster ?? '')}" alt="" loading="lazy"><div class="dl-body">
+        <a class="dl-title" href="#/meta/${esc(d.ctx.type)}/${encodeURIComponent(d.ctx.metaId)}">${esc(d.ctx.name)}${d.ctx.season != null ? ` ${epLabel(d.ctx.season, d.ctx.episode)}` : ''}</a>
+        <progress max="100" value="${d.state === 'done' ? 100 : pct(x)}" aria-label="Downloaded"></progress><span class="dl-state">${esc(dlStatus(x))}</span></div>
+      <div class="dl-acts">${d.state === 'done' ? btn('play', 'Play', 'primary') : ''}${d.state === 'running' || d.state === 'queued' ? btn('pause', 'Pause') : ''}${d.state === 'paused' ? btn('resume', 'Resume') : ''}${d.state === 'failed' ? btn('resume', 'Try again') : ''}${btn('del', d.state === 'done' ? 'Delete' : 'Cancel', 'quiet danger')}</div></li>`; }).join('')}</ul>
+      <p class="hint">Saved in ${esc(localStorage.getItem('dl_dir') || 'Videos\\Marquee')}. Change the folder in Settings › System.</p>`
+      : state('Nothing downloaded yet. The arrow next to a stream saves it to this PC; on a series, Download season saves every aired episode.')}</section>`;
+  app.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => dlAct(b.closest('[data-dl]').dataset.dl, b.dataset.act)));
+}
+function dlAct(id, act) {
+  const d = downloads().find((x) => x.id === id);
+  if (!d) return;
+  if (act === 'play') { autoStart = d.ctx.videoId; location.hash = `#/meta/${d.ctx.type}/${encodeURIComponent(d.ctx.metaId)}${d.ctx.season != null ? `/${encodeURIComponent(d.ctx.videoId)}` : ''}`; return; }
+  if (act === 'pause') { editDl(id, { state: 'paused' }); if (d.state === 'running') tauri.core.invoke('dl_stop', { id }); }
+  if (act === 'resume') { editDl(id, { state: 'queued' }); pumpDownloads(); }
+  if (act === 'del') {
+    if (d.state === 'done' && !confirm(`Delete ${d.name} from this PC?`)) return;
+    saveDl(downloads().filter((x) => x.id !== id));
+    if (d.state === 'running') tauri.core.invoke('dl_stop', { id }); // its catch deletes the .part
+    else if (d.dir) for (const p of [d.file, partOf(d)]) if (p) tauri.core.invoke('dl_delete', { path: p }).catch(() => {});
+  }
+  downloadsView();
+  $(`[data-dl="${CSS.escape(id)}"] [data-act]`)?.focus();
+}
+tauri?.event.listen('dl', ({ payload: p }) => {
+  dlLive[p.id] = p;
+  const row = document.querySelector(`[data-dl="${CSS.escape(p.id)}"]`);
+  if (!row) return;
+  row.querySelector('progress').value = pct(p);
+  row.querySelector('.dl-state').textContent = dlStatus({ ...downloads().find((d) => d.id === p.id), ...p });
+});
+if (tauri) { saveDl(downloads().map((d) => (d.state === 'running' ? { ...d, state: 'queued' } : d))); pumpDownloads(); } // closed mid-download: carry on from the .part
 
 // Intro/recap/credits times for the Skip button and next-episode card: IntroDB for IMDb shows, AniSkip for Kitsu anime ids.
 async function loadSegments(ctx) {
@@ -848,7 +955,7 @@ async function fitCands() {
   }));
   return [...out.values()];
 }
-const LIB_TABS = (cur) => `<div class="seasons lib-tabs">${[['titles', '', 'Titles'], ['calendar', '/calendar', 'Calendar'], ['recap', '/recap', 'Ticket stubs']]
+const LIB_TABS = (cur) => `<div class="seasons lib-tabs">${[['titles', '', 'Titles'], ['calendar', '/calendar', 'Calendar'], ['recap', '/recap', 'Ticket stubs'], ...(tauri ? [['downloads', '/downloads', 'Downloads']] : [])]
   .map(([k, path, t]) => `<a href="#/library${path}"${k === cur ? ' aria-current="page"' : ''}>${t}</a>`).join('')}</div>`;
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -1093,7 +1200,8 @@ const sections = (set) => [
     + switchRow('cwBlur', 'Blur next-up stills', set.cwBlur, 'Keeps the next episode’s picture from spoiling it.')
     + switchRow('resumePrompt', 'Offer to resume at launch', set.resumePrompt, 'When Marquee opens, it asks whether to carry on with what you watched last.')),
   sec('trakt', '<div id="trakt"></div>'), // filled in by wireTrakt
-  sec('system', setRow('Updates', `${pills('updateChannel', [['stable', 'Stable'], ['beta', 'Beta']], set.updateChannel)}<p class="hint"><button class="btn quiet" id="upd">Check for updates</button> <span id="upd-msg" role="status"></span></p>`,
+  sec('system', (tauri ? setRow('Downloads folder', `<p class="hint"><span id="dl-dir">${esc(localStorage.getItem('dl_dir') || 'Videos\\Marquee')}</span> <button class="btn quiet" id="dl-pick">Change folder</button></p>`,
+    'On this PC only. Downloads already saved stay where they are.') : '') + setRow('Updates', `${pills('updateChannel', [['stable', 'Stable'], ['beta', 'Beta']], set.updateChannel)}<p class="hint"><button class="btn quiet" id="upd">Check for updates</button> <span id="upd-msg" role="status"></span></p>`,
       'Beta gets new features first and can have rough edges.')
     + (torboxKey(addonUrls()) ? setRow('TorBox', '<p id="tb-msg" role="status">Checking…</p>', 'Read from your Torrentio addon link. Marquee warns you 7 days before the plan ends.') : '')
     + setRow('Name friends see', '<input class="lang text" id="friend-name" maxlength="40" aria-label="Name friends see" spellcheck="false" autocomplete="off">',
@@ -1149,6 +1257,10 @@ function settingsView() {
     };
   });
   if ($('#exe')) $('#exe').onclick = chooseExe;
+  if ($('#dl-pick')) $('#dl-pick').onclick = async () => {
+    const dir = await tauri.core.invoke('pick_dir');
+    if (dir) { localStorage.setItem('dl_dir', dir); $('#dl-dir').textContent = dir; } // new downloads only; started ones keep their folder
+  };
   $('#upd').onclick = async () => {
     const msg = $('#upd-msg');
     msg.textContent = 'Checking…';
@@ -1362,7 +1474,7 @@ async function route() {
     if (view === 'search') return search(decodeURIComponent(a || ''));
     if (view === 'meta') return details(a, decodeURIComponent(b), c && decodeURIComponent(c));
     if (view === 'addons') return addonsView();
-    if (view === 'library') return a === 'calendar' ? calendarView(b) : a === 'recap' ? recapView(b) : libraryView();
+    if (view === 'library') return a === 'calendar' ? calendarView(b) : a === 'recap' ? recapView(b) : a === 'downloads' ? downloadsView() : libraryView();
     if (view === 'fit') return fitView();
     if (view === 'profiles') return profilesView();
     if (view === 'settings') return settingsView();

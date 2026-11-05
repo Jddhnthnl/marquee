@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest, PIN, pinHash, pinWait, dlName, dlNext, fmtSize } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -137,4 +137,13 @@ assert.equal(h, await pinHash('1234', 'salt'), 'same pin + salt, same hash');
 assert.notEqual(h, await pinHash('1234', 'other'), 'salt matters');
 assert.notEqual(h, await pinHash('1235', 'salt'));
 assert.deepEqual([0, 1, 4, 5, 6, 10].map(pinWait), [0, 0, 0, 30000, 0, 30000]);
+// downloads
+assert.equal(dlName({ name: 'Breaking Bad', season: 1, episode: 2 }), 'Breaking Bad S01E02');
+assert.equal(dlName({ name: 'What If...?' }), 'What If', 'no ? and no trailing dots on Windows');
+assert.equal(dlName({ name: 'AC/DC: Live <1991>' }), 'ACDC Live 1991');
+assert.equal(dlName({ name: '???' }), 'video');
+assert.equal(dlNext([{ state: 'done' }, { state: 'queued', id: 'a' }, { state: 'queued', id: 'b' }]).id, 'a');
+assert.equal(dlNext([{ state: 'queued' }, { state: 'running' }]), null, 'one at a time');
+assert.equal(dlNext([{ state: 'paused' }, { state: 'failed' }]), null);
+assert.deepEqual([fmtSize(2.64e9), fmtSize(734e6), fmtSize(1000)], ['2.6 GB', '734 MB', '1 MB']);
 console.log('look tests pass');

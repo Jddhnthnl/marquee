@@ -4,10 +4,11 @@ use serde_json::{json, Map, Value};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -149,6 +150,77 @@ async fn torbox_me(key: String) -> Result<Value, String> {
     let r = reqwest::Client::new().get("https://api.torbox.app/v1/api/user/me").bearer_auth(key)
         .timeout(Duration::from_secs(8)).send().await.map_err(|e| e.to_string())?;
     r.json().await.map_err(|e| e.to_string())
+}
+
+// ---------- downloads: one file at a time (the queue lives in app.js); a stopped or broken one resumes from its .part ----------
+#[derive(Default)]
+struct Downloads(Mutex<HashMap<String, Arc<AtomicBool>>>);
+
+/// Downloads url to dir\name.<ext>, resuming dir\name.part. Progress goes out as "dl" events { id, got, total }.
+/// Ok(final path); Err("stopped") after dl_stop, other Err = failed (the .part stays for a retry).
+#[tauri::command]
+async fn dl_start(app: AppHandle, state: State<'_, Downloads>, id: String, url: String, headers: Vec<String>, dir: String, name: String) -> Result<String, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    state.0.lock().unwrap().insert(id.clone(), stop.clone());
+    let r = download(&app, &id, &url, &headers, &dir, &name, &stop).await;
+    state.0.lock().unwrap().remove(&id);
+    r
+}
+
+async fn download(app: &AppHandle, id: &str, url: &str, headers: &[String], dir: &str, name: &str, stop: &AtomicBool) -> Result<String, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("can't create the folder: {e}"))?;
+    let part = Path::new(dir).join(format!("{name}.part"));
+    let have = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+    let client = reqwest::Client::builder().connect_timeout(Duration::from_secs(20)).read_timeout(Duration::from_secs(60)).build().map_err(|e| e.to_string())?;
+    let mut req = client.get(url); // follows the debrid redirect to the file
+    for h in headers { if let Some((k, v)) = h.split_once(':') { req = req.header(k.trim(), v.trim()); } }
+    if have > 0 { req = req.header("Range", format!("bytes={have}-")); }
+    let mut r = req.send().await.map_err(|e| e.to_string())?;
+    if !r.status().is_success() { return Err(format!("the server answered {}", r.status())); }
+    let resumed = r.status() == reqwest::StatusCode::PARTIAL_CONTENT; // 200 = the server ignored Range: start over
+    let mut got = if resumed { have } else { 0 };
+    let total = r.content_length().map_or(0, |n| n + got);
+    let ext = Path::new(r.url().path()).extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase())
+        .filter(|e| ["mkv", "mp4", "avi", "webm", "m4v", "mov", "ts"].contains(&e.as_str())).unwrap_or_else(|| "mkv".into());
+    let mut f = OpenOptions::new().create(true).write(true).append(resumed).truncate(!resumed).open(&part).map_err(|e| format!("can't write the file: {e}"))?;
+    let mut tick = Instant::now();
+    while let Some(c) = r.chunk().await.map_err(|e| e.to_string())? {
+        if stop.load(Ordering::Relaxed) { return Err("stopped".into()); }
+        f.write_all(&c).map_err(|e| format!("can't write the file: {e}"))?;
+        got += c.len() as u64;
+        if tick.elapsed() > Duration::from_millis(700) { tick = Instant::now(); let _ = app.emit("dl", json!({ "id": id, "got": got, "total": total })); }
+    }
+    if total > 0 && got < total { return Err("the connection dropped".into()); }
+    let _ = app.emit("dl", json!({ "id": id, "got": got, "total": got })); // small files finish before the first tick
+    drop(f);
+    let out = Path::new(dir).join(format!("{name}.{ext}"));
+    std::fs::rename(&part, &out).map_err(|e| e.to_string())?;
+    Ok(out.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn dl_stop(state: State<'_, Downloads>, id: String) {
+    if let Some(s) = state.0.lock().unwrap().get(&id) { s.store(true, Ordering::Relaxed); }
+}
+
+/// Deletes a downloaded file or a leftover .part. Only video files and .part, so a bad path can't take anything else.
+#[tauri::command]
+fn dl_delete(path: String) -> Result<(), String> {
+    let ok = Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| ["mkv", "mp4", "avi", "webm", "m4v", "mov", "ts", "part"].contains(&e.to_ascii_lowercase().as_str()));
+    if !ok { return Err("not a download".into()); }
+    match std::fs::remove_file(&path) { Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()), _ => Ok(()) }
+}
+
+/// Default download folder: Videos\Marquee.
+#[tauri::command]
+fn video_dir(app: AppHandle) -> Result<String, String> {
+    app.path().video_dir().map(|d| d.join("Marquee").to_string_lossy().into_owned()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn pick_dir(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog().file().blocking_pick_folder().map(|f| f.to_string())
 }
 
 /// "Another app" player: hand the link to the .exe the user picked.
@@ -374,6 +446,7 @@ fn main() {
     tauri::Builder::default()
         .manage(Player::default())
         .manage(DiscordState::default())
+        .manage(Downloads::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -391,7 +464,7 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, torbox_me, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log])
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, torbox_me, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log, dl_start, dl_stop, dl_delete, video_dir, pick_dir])
         .run(tauri::generate_context!())
         .expect("error while running Marquee");
 }

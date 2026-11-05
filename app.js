@@ -1,6 +1,7 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft } from './playback.js';
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
+import { deviceCode, deviceLink, sync as traktPull, addHistory, revoke } from './trakt.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
   accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList, monthDays, airDays, recap, hoursMin, nearest } from './look.js';
@@ -361,6 +362,7 @@ async function details(type, id, pickVid) {
   $('#lib').onclick = () => {
     save(pk('library'), inLib ? library().filter((m) => m.id !== meta.id)
       : [...library(), { id: meta.id, type, name: meta.name, poster: meta.poster, releaseInfo: meta.releaseInfo }]);
+    traktSync();
     details(type, id, pickVid); // stay on the episode you were looking at
   };
   if ($('#send')) $('#send').onclick = () => sendDialog(meta, type);
@@ -925,7 +927,7 @@ function profilesView() {
     <p class="hint">Each profile keeps its own addons, library, progress and settings. <a class="link" href="#/settings">Edit ${esc(p.list.find((x) => x.id === p.active)?.name ?? 'profile')}</a></p>
     <p class="hint">Signed in as ${esc(account?.email)}. <button class="link" id="signout">Sign out</button></p></section>`;
   $('#signout').onclick = async () => { await signOutAndForget(); location.hash = '#/'; };
-  app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); location.hash = '#/'; }));
+  app.querySelectorAll('[data-id]').forEach((b) => (b.onclick = () => { save('profiles', { ...p, active: b.dataset.id }); manifests.clear(); traktSync(); location.hash = '#/'; }));
   $('#new').onclick = () => {
     const name = prompt('Name for the new profile')?.trim();
     if (!name) return;
@@ -959,7 +961,7 @@ const paintSample = (el, set) => {
 const PIN_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15 3l6 6-2 1-3 3 1 5-2 2-4-4-5 5-1-1 5-5-4-4 2-2 5 1 3-3z"/></svg>';
 
 const SECTIONS = [['profile', 'Profile'], ['streams', 'Streams'], ['playback', 'Playback'], ['player', 'Player'], ['subtitles', 'Subtitles'],
-  ['look', 'Look'], ['home', 'Home'], ['detail', 'Detail page'], ['cw', 'Continue watching'], ['system', 'System']];
+  ['look', 'Look'], ['home', 'Home'], ['detail', 'Detail page'], ['cw', 'Continue watching'], ['trakt', 'Trakt'], ['system', 'System']];
 const sec = (key, body) => `<section aria-labelledby="s-${key}" data-sec="${key}"><div class="set-head"><h2 id="s-${key}">${SECTIONS.find((s) => s[0] === key)[1]}</h2>
   ${key === 'profile' ? '' : `<button class="btn quiet" data-reset="${key}">Reset to defaults</button>`}</div>${body}</section>`;
 
@@ -1052,6 +1054,7 @@ const sections = (set) => [
     + switchRow('cwUpcoming', 'Upcoming row', set.cwUpcoming, 'Next episodes that haven’t aired yet get their own row on Home.')
     + switchRow('cwBlur', 'Blur next-up stills', set.cwBlur, 'Keeps the next episode’s picture from spoiling it.')
     + switchRow('resumePrompt', 'Offer to resume at launch', set.resumePrompt, 'When Marquee opens, it asks whether to carry on with what you watched last.')),
+  sec('trakt', '<div id="trakt"></div>'), // filled in by wireTrakt
   sec('system', setRow('Updates', `${pills('updateChannel', [['stable', 'Stable'], ['beta', 'Beta']], set.updateChannel)}<p class="hint"><button class="btn quiet" id="upd">Check for updates</button> <span id="upd-msg" role="status"></span></p>`,
       'Beta gets new features first and can have rough edges.')
     + (torboxKey(addonUrls()) ? setRow('TorBox', '<p id="tb-msg" role="status">Checking…</p>', 'Read from your Torrentio addon link. Marquee warns you 7 days before the plan ends.') : '')
@@ -1081,7 +1084,7 @@ function settingsView() {
   const typed = (name, value) => (typeof { ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS }[name] === 'number' ? +value : value);
   const value = (r) => (r.closest('[data-multi]') ? [...r.closest('[data-multi]').querySelectorAll('input:checked')].map((i) => i.value)
     : r.type === 'checkbox' ? r.checked : typed(r.name, r.value));
-  wireProfile(); wireLists(); wireInvites(); wireReports();
+  wireProfile(); wireLists(); wireInvites(); wireReports(); wireTrakt();
   $('#diag').onclick = () => reportDialog();
   app.querySelectorAll('[data-sec]:not([data-sec=profile]) :is(input, select)[name]').forEach((r) => {
     r.oninput = () => { // preview and readouts follow the slider; the profile is saved once you let go
@@ -1388,7 +1391,7 @@ watch(
     launched = true;
     if (first && profiles().list.length > 1 && !settings().rememberProfile && location.hash !== '#/profiles') location.hash = '#/profiles'; // hashchange routes
     else { route(); if (first) setTimeout(resumeOffer, settings().intro && !calm.matches ? 2600 : 600); }
-    if (first) { checkAlerts(); checkDebrid(); startFriends(user); }
+    if (first) { checkAlerts(); checkDebrid(); startFriends(user); traktSync(); }
   },
   (code) => { account = null; stopInbox(); inbox = []; activity = []; activityAt = 0; loginView(code); },
 );
@@ -1464,6 +1467,66 @@ async function torbox() {
 }
 const TB_PLANS = ['Free', 'Essential', 'Pro', 'Standard']; // shortcut: TorBox's plan ids as of 2026-11, unknown ids show as "TorBox"
 const tbLine = (me) => `${TB_PLANS[me.plan] ?? 'TorBox'} plan${me.premium_expires_at ? `, ${daysLeft(me.premium_expires_at) < 0 ? 'ended' : 'renews or ends'} ${new Date(me.premium_expires_at).toLocaleDateString()}` : ''}`;
+// ---------- Trakt, per profile: Settings > Trakt links it; syncs at launch, profile switch, Library change; finished titles go to Trakt history ----------
+const traktCfg = import('./trakt-config.js').then((m) => m.default, () => null); // CI writes it from repo secrets; missing = no Trakt in this build
+let traktRun = null, traktAgain = false;
+function traktSync() { // one run at a time; a change during a run queues one more. Resolves to a status line for Settings.
+  if (traktRun) { traktAgain = true; return traktRun; }
+  traktRun = (async () => {
+    const cfg = await traktCfg, key = pk('trakt'), libKey = pk('library'), progKey = pk('watch_progress'), link = load(key, null);
+    try {
+      if (!cfg || !link || link.error) return ''; // inside the try, so finally still frees the next run
+      const r = await traktPull(cfg, link, load(libKey, []), load(progKey, {}));
+      save(key, r.link);
+      const gone = new Set(r.removeLocal), lib = load(libKey, []), kept = lib.filter((m) => !gone.has(m.id)), added = r.addLocal.filter((m) => !kept.some((x) => x.id === m.id));
+      if (kept.length !== lib.length || added.length) save(libKey, [...kept, ...added]);
+      const prog = load(progKey, {}), marks = Object.entries(r.marks).filter(([k]) => !prog[k]); // re-read: the player may have saved meanwhile
+      if (marks.length) save(progKey, { ...prog, ...Object.fromEntries(marks) });
+      return `Synced. Library: ${added.length} added, ${lib.length - kept.length} removed. ${marks.length} marked watched.`;
+    } catch (e) {
+      if (e.status === 401) { save(key, { ...link, error: true }); return 'Trakt signed Marquee out. Unlink, then link again.'; }
+      return 'Couldn’t reach Trakt. Marquee tries again next time it opens.';
+    } finally { traktRun = null; if (traktAgain) { traktAgain = false; traktSync(); } }
+  })();
+  return traktRun;
+}
+async function traktFinished(ctx) {
+  const cfg = await traktCfg, key = pk('trakt'), link = load(key, null);
+  if (!cfg || !link || link.error) return;
+  try { const next = await addHistory(cfg, link, ctx); if (next !== link) save(key, next); } catch {} // shortcut: a failed send is lost; Trakt still gets it if marked there
+}
+async function wireTrakt() {
+  const box = $('#trakt'), cfg = await traktCfg;
+  if (!box) return;
+  const draw = (msg = '') => {
+    const link = load(pk('trakt'), null);
+    box.innerHTML = (!cfg ? setRow('Trakt', '<p class="hint">This copy of Marquee was built without Trakt.</p>')
+      : !link ? setRow('Trakt', '<button class="btn" id="tk-link">Link Trakt</button>',
+        'Keeps this profile’s Library and your Trakt watchlist the same, marks what you watched on Trakt as watched here, and adds what you finish here to your Trakt history.')
+      : setRow('Trakt', `<p>${link.error ? 'Trakt signed Marquee out.' : `Linked${link.user ? ` as <b>${esc(link.user)}</b>` : ''}. ${link.at ? `Last synced ${esc(new Date(link.at).toLocaleString())}.` : 'Not synced yet.'}`}</p>
+        <p>${link.error ? '' : '<button class="btn quiet" id="tk-sync">Sync now</button> '}<button class="btn quiet danger" id="tk-unlink">Unlink</button></p>`,
+        'Syncs when Marquee opens, when you switch profile, when your Library changes and when you finish something. Only titles with an IMDb id take part.'))
+      + `<p class="hint" role="status">${esc(msg)}</p>`;
+    if ($('#tk-sync')) $('#tk-sync').onclick = async () => { $('#tk-sync').disabled = true; const m = await traktSync(); if (box.isConnected) draw(m); };
+    if ($('#tk-unlink')) $('#tk-unlink').onclick = () => { const k = pk('trakt'), l = load(k, null); if (l && !l.error) revoke(cfg, l); save(k, null); draw('Unlinked. Your Library and watched marks stay as they are.'); };
+    if ($('#tk-link')) $('#tk-link').onclick = async () => {
+      let dc;
+      try { dc = await deviceCode(cfg); } catch { return draw('Couldn’t reach Trakt. Check your internet connection.'); }
+      const key = pk('trakt'); // the profile you linked from, even if you switch before approving
+      let stopped = false;
+      box.innerHTML = setRow('Trakt', `<p>On your phone or computer, go to <b>${esc(dc.verification_url.replace(/^https?:\/\//, ''))}</b> and enter</p>
+        <p class="tk-code">${esc(dc.user_code)}</p><p><button class="btn quiet" id="tk-cancel">Cancel</button></p>`, 'Waiting for you to approve Marquee on Trakt…');
+      $('#tk-cancel').onclick = () => { stopped = true; draw(); };
+      const link = await deviceLink(cfg, dc, () => stopped);
+      if (stopped) return;
+      if (link) save(key, link);
+      if (box.isConnected) draw(link ? 'Linked. Syncing…' : 'The code expired or was turned down. Try again.');
+      if (link && key === pk('trakt')) { const m = await traktSync(); if (box.isConnected) draw(m); }
+    };
+  };
+  draw();
+}
+
 async function checkDebrid() { // at launch, once a day per PC, from 7 days before the plan ends
   const today = new Date().toDateString();
   if (localStorage.getItem('debrid_warned') === today) return;
@@ -1541,6 +1604,7 @@ async function sendDialog(meta, type) {
 }
 // Called when something becomes finished: it leaves "From friends" and, if this profile shares, goes to "Friends are watching".
 function onFinished(ctx) {
+  traktFinished(ctx);
   inbox.filter((x) => x.id === ctx.metaId).forEach((x) => dismiss(x.key).catch(() => {}));
   if (settings().shareFinished) shareFinished({ type: ctx.type, id: ctx.metaId, name: ctx.name ?? '', poster: ctx.poster ?? '', ...(ctx.season ? { ep: `S${ctx.season} E${ctx.episode}` } : {}), at: Date.now() }).catch(() => {});
 }

@@ -22,6 +22,14 @@ jobs:
       - name: Fetch mpv
         shell: bash
         run: bash src-tauri/fetch-mpv.sh
+      - name: Write the Trakt config (repo secrets, never committed)
+        shell: bash
+        env:
+          TRAKT_ID: ${{ secrets.TRAKT_ID }}
+          TRAKT_SECRET: ${{ secrets.TRAKT_SECRET }}
+        run: |
+          test -n "$TRAKT_ID" && test -n "$TRAKT_SECRET" || { echo "TRAKT_ID / TRAKT_SECRET repo secrets are missing"; exit 1; }
+          node -e 'console.log("export default " + JSON.stringify({ id: process.env.TRAKT_ID, secret: process.env.TRAKT_SECRET }) + ";")' > trakt-config.js
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

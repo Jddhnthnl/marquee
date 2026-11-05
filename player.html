@@ -151,6 +151,11 @@
   .seasons .dot { display: inline-block; width: 11px; height: 11px; margin-right: 7px; border-radius: 50%; vertical-align: -1px; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
   .menu .menu-style { border-top: 1px solid rgba(237,230,216,.12); border-radius: 0 0 7px 7px; margin-top: 4px; color: var(--dim); }
   .menu .menu-style::before { display: none; }
+  .menu .remember { border-top: 1px solid rgba(237,230,216,.12); border-radius: 0; margin-top: 4px; color: var(--dim); }
+  .menu .remember::before { width: 10px; height: 10px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px var(--dim); }
+  .menu .remember[aria-checked=true] { color: var(--paper); font-weight: 400; }
+  .menu .remember[aria-checked=true]::before { background: var(--lamp); box-shadow: none; }
+  .menu .remember + .menu-style { margin-top: 0; }
 
   .wait { position: fixed; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px; border-radius: 50%; display: none;
     border: 3px solid rgba(237,230,216,.18); border-top-color: var(--lamp); animation: spin .9s linear infinite; }
@@ -279,7 +284,7 @@
 </aside>
 
 <script type="module">
-import { PLAYBACK_DEFAULTS, SUB_COLORS, SUB_FONTS, LANGS, subProps, videoProps, pickSub, pickAudio, segmentAt, nextCardAt, fromChapters } from './playback.js';
+import { PLAYBACK_DEFAULTS, SUB_COLORS, SUB_FONTS, LANGS, subProps, videoProps, pickSub, pickAudio, langKey, segmentAt, nextCardAt, fromChapters } from './playback.js';
 const { invoke } = window.__TAURI__.core;
 const $ = (s) => document.querySelector(s);
 const cmd = (...args) => invoke('mpv_cmd', { args }).catch(() => null);
@@ -303,7 +308,9 @@ function trackName(t) {
 
 function render(k) {
   // another file is starting: forget the last one's end, chapters and length, or its end-of-file would close the player
-  if (k === 'start-file') { Object.assign(s, { 'eof-reached': false, 'chapter-list': [], duration: 0, 'time-pos': 0 }); moved = Date.now(); stallSent = false; }
+  if (k === 'start-file') { Object.assign(s, { 'eof-reached': false, 'chapter-list': [], duration: 0, 'time-pos': 0 }); moved = Date.now(); stallSent = false;
+    // a new file (or a fresh mpv that wasn't listening when the first info came): send the timing again on the next track-list
+    if (delayHand) cmd('set_property', 'sub-delay', delayNow); else delayNow = NaN; }
   if (k === 'time-pos') moved = Date.now();
   const dur = s.duration || 0, pos = s['time-pos'] || 0;
   if (k === 'pause') {
@@ -344,7 +351,7 @@ function render(k) {
 // Skip intro/recap and the next-episode card, driven by the Playback settings Marquee sends in info.settings
 const opt = () => ({ ...PLAYBACK_DEFAULTS, ...info.settings });
 let skipped = new Set(), undo = null, card = 'none', left = 0, autoRun = 0, countTimer, prefetched = false; // card: none | shown | done
-function newEpisode() { subChosen = audioChosen = false; prefetched = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
+function newEpisode() { subChosen = audioChosen = delayHand = false; prefetched = false; skipped = new Set(); clearTimeout(undo?.timer); undo = null; hideCard('none'); $('#still').hidden = true; }
 const segs = () => (info.segments?.length ? info.segments : fromChapters(s['chapter-list'], s.duration));
 const nextEp = () => info.next && (info.episodes || []).find((e) => e.id === info.next);
 function timeline() {
@@ -433,12 +440,26 @@ function showSwitched(text) {
   clearTimeout(switchTimer); switchTimer = setTimeout(() => (b.hidden = true), 10000);
 }
 let subChosen = false, audioChosen = false; // you picked a track yourself: stop choosing for you until the next episode
+// Subtitle timing (mpv sub-delay, + = later). A show can remember it per release; Z/X or the Timing slider set it by hand for this episode.
+let delayNow = 0, delayHand = false, delayTimer;
+const secs = (v) => (v ? `${v > 0 ? '+' : ''}${v.toFixed(1)} s` : 'In sync');
+function setDelay(v, keep = true) {
+  delayNow = Math.max(-10, Math.min(10, Math.round((v || 0) * 10) / 10)); delayHand = true; // NaN: not sent to this file yet
+  cmd('set_property', 'sub-delay', delayNow);
+  clearTimeout(delayTimer);
+  if (keep && info.show?.delay) delayTimer = setTimeout(() => ask({ type: 'show', field: 'delay', value: delayNow }), 800); // Z/X repeats: save once
+}
+// The playing track's language for "Remember for this show": 'off' when subtitles are off, '' when the file doesn't say
+const trackLang = (prop) => (prop === 'sid' && (s.sid === 'no' || s.sid === false) ? 'off'
+  : langKey(s['track-list'].find((t) => t.type === (prop === 'aid' ? 'audio' : 'sub') && t.id === s[prop])?.lang));
 function applySubs() {
   const o = opt(), tracks = s['track-list'];
   for (const [k, v] of subProps(o)) cmd('set_property', k, v);
+  if (!delayHand && (o.subDelay ?? 0) !== delayNow) { delayNow = o.subDelay ?? 0; cmd('set_property', 'sub-delay', delayNow); }
   const aid = audioChosen ? null : pickAudio(tracks, o.audioLang);
   if (aid != null && s.aid !== aid) cmd('set_property', 'aid', aid);
   if (subChosen) return;
+  if (o.subOff) { if (tracks.some((t) => t.type === 'sub')) cmd('set_property', 'sid', 'no'); return; }
   const audio = tracks.find((t) => t.type === 'audio' && t.id === (aid ?? s.aid))?.lang ?? '';
   const id = pickSub(tracks, [o.subLang1, o.subLang2], { onlyMine: o.subOnlyMine, forced: o.subForced, audio });
   if (id != null && s.sid !== id) cmd('set_property', 'sid', id); // re-checked as tracks appear, so a better language that loads late still wins
@@ -539,6 +560,23 @@ function openPanel(name, refresh) {
         b.onclick = () => { change({ [key]: v }); openPanel('style', true); };
         return b;
       })));
+    // Timing is live and belongs to this episode, or to this show and release once remembered; Z and X nudge it too
+    const timing = () => {
+      const out = el('output', { textContent: secs(delayNow) });
+      const r = el('input', { type: 'range', min: -10, max: 10, step: 0.1, value: delayNow });
+      r.setAttribute('aria-label', 'Timing'); r.setAttribute('aria-describedby', 'timing-hint');
+      r.oninput = () => { setDelay(+r.value, false); out.textContent = secs(delayNow); };
+      r.onchange = () => setDelay(+r.value);
+      const row = el('div', { className: 'style-row' }, el('h3', { textContent: 'Timing' }), el('div', { className: 'slide' }, r, out),
+        el('p', { className: 'empty', id: 'timing-hint', textContent: 'Plus shows them later. Z and X nudge by a tenth of a second.' }));
+      if (info.show) {
+        const b = el('button', { textContent: 'Remember for this show and release' });
+        b.setAttribute('aria-pressed', String(!!info.show.delay));
+        b.onclick = () => { info.show = { ...info.show, delay: !info.show.delay }; ask({ type: 'show', field: 'delay', value: info.show.delay ? delayNow : null }); openPanel('style', true); };
+        row.append(el('div', { className: 'seasons' }, b));
+      }
+      return row;
+    };
     // each font pill is set in its own face, so you see the choice before you make it; Bold sits with them
     const font = choice('subFont', 'Font', SUB_FONTS);
     font.querySelectorAll('button').forEach((b, i) => { if (SUB_FONTS[i][0]) b.style.fontFamily = `${SUB_FONTS[i][0]}, sans-serif`; });
@@ -552,6 +590,7 @@ function openPanel(name, refresh) {
       el('div', { className: 'style-row' }, el('h3', { textContent: 'Language' }),
         el('div', { className: 'slide' }, lang('subLang1', 'First choice', 'Whatever the file picks'), lang('subLang2', 'Then', 'No second choice')),
         el('div', { className: 'seasons' }, toggle('subOnlyMine', 'Only my languages'), toggle('subForced', 'Forced subtitles'), toggle('subSdh', 'Hide sound descriptions'))),
+      timing(),
       el('p', { className: 'empty', textContent: 'Saved to this profile. Same options as Settings > Subtitles.' }));
   } else if (name === 'picture') { // this session only; the defaults are in Settings > Player
     const row = (key, label) => {
@@ -641,13 +680,34 @@ function openMenu(name) {
     b.onclick = () => { run(); openMenu(name); };
     return b;
   };
+  // with "Remember for this show" ticked, the track you pick becomes the show's language (shows_<pid> in Marquee)
+  const field = (prop) => (prop === 'aid' ? 'audio' : 'sub'), FIELD = { aid: 'audioLang', sid: 'subLang' };
+  const pick = (prop, id, lang) => {
+    if (prop === 'sid') subChosen = true; else audioChosen = true;
+    cmd('set_property', prop, id);
+    if (info.show?.[field(prop)] && lang) ask({ type: 'show', field: FIELD[prop], value: lang });
+  };
   const tracks = (type, prop) => s['track-list'].filter((t) => t.type === type)
-    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => { if (prop === 'sid') subChosen = true; else audioChosen = true; cmd('set_property', prop, t.id); }); });
+    .map((t) => { const n = trackName(t); return item(n.main, [n.sub, t.external ? 'external' : ''].filter(Boolean).join(', '), s[prop] === t.id, () => pick(prop, t.id, langKey(t.lang))); });
+  const remember = (prop) => {
+    if (!info.show) return []; // movies: nothing to remember
+    const on = !!info.show[field(prop)];
+    const b = el('button', { className: 'remember', textContent: 'Remember for this show' });
+    b.setAttribute('role', 'menuitemcheckbox'); b.setAttribute('aria-checked', String(on));
+    b.onclick = () => {
+      const lang = trackLang(prop);
+      if (!on && !lang) return toast("This track doesn't say its language, so it can't be remembered", 2600);
+      info.show = { ...info.show, [field(prop)]: !on };
+      ask({ type: 'show', field: FIELD[prop], value: on ? null : lang });
+      openMenu(name);
+    };
+    return [b];
+  };
   const styleItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Subtitle settings…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('style'); return b; };
   const picItem = () => { const b = el('button', { className: 'menu-style', textContent: 'Picture…' }); b.setAttribute('role', 'menuitem'); b.onclick = () => openPanel('picture'); return b; };
   m.replaceChildren(...(name === 'fit' ? [...Object.entries(FITS).map(([k, [label, sub]]) => item(label, sub, fit === k, () => setFit(k, true))), picItem()]
-    : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => { subChosen = true; cmd('set_property', 'sid', 'no'); }), ...tracks('sub', 'sid'), styleItem()]
-    : name === 'audio' ? tracks('audio', 'aid')
+    : name === 'sub' ? [item('Off', '', s.sid === 'no' || s.sid === false, () => pick('sid', 'no', 'off')), ...tracks('sub', 'sid'), ...remember('sid'), styleItem()]
+    : name === 'audio' ? [...tracks('audio', 'aid'), ...remember('aid')]
     : [0.5, 0.75, 1, 1.25, 1.5, 2].map((x) => item(`${x}×`, x === 1 ? 'Normal' : '', Math.abs(s.speed - x) < 0.01, () => cmd('set_property', 'speed', x)))));
   m.querySelector('[aria-checked=true]')?.focus();
 }
@@ -713,6 +773,8 @@ addEventListener('keydown', (e) => {
     arrowleft: () => { cmd('seek', -10); toast('Back 10 seconds'); }, j: () => cmd('seek', -10),
     l: () => cmd('seek', 10),
     arrowup: () => nudgeVolume(5), arrowdown: () => nudgeVolume(-5),
+    z: () => { setDelay(delayNow - 0.1); toast(`Subtitle timing ${secs(delayNow)}`); },
+    x: () => { setDelay(delayNow + 0.1); toast(`Subtitle timing ${secs(delayNow)}`); },
     m: () => cmd('cycle', 'mute'), f: toggleFull, c: () => { subChosen = true; cmd('cycle', 'sub'); },
     a: () => { const ks = Object.keys(FITS); setFit(ks[(ks.indexOf(fit) + 1) % ks.length], true); },
     n: () => $('#next').click(), e: () => info.episodes?.length && openPanel('episodes'), i: () => openPanel('info'),

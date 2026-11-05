@@ -33,6 +33,8 @@ export const LANGS = { en: ['eng', 'English'], es: ['spa', 'Spanish'], fr: ['fre
   pt: ['por', 'Portuguese'], nl: ['dut', 'nld', 'Dutch'], pl: ['pol', 'Polish'], ru: ['rus', 'Russian'], tr: ['tur', 'Turkish'], ar: ['ara', 'Arabic'],
   hi: ['hin', 'Hindi'], ja: ['jpn', 'Japanese'], ko: ['kor', 'Korean'], zh: ['chi', 'zho', 'Chinese'], th: ['tha', 'Thai'], vi: ['vie', 'Vietnamese'],
   id: ['ind', 'Indonesian'], tl: ['fil', 'tgl', 'Filipino'] };
+// A track's language as the 2-letter key Settings uses ('jpn' -> 'ja'); unknown codes come back as they are.
+export const langKey = (code) => { const c = (code ?? '').toLowerCase().split(/[-_]/)[0]; return Object.keys(LANGS).find((k) => k === c || LANGS[k].includes(c)) ?? c; };
 const isLang = (code, want) => { const c = (code ?? '').toLowerCase().split(/[-_]/)[0]; return c === want || (LANGS[want] ?? []).includes(c); };
 // Track id to show for the preferred languages; 'no' turns subtitles off; null leaves mpv's choice alone.
 // forced: when no wanted language is there, show a forced (signs-only) track in the audio's language. onlyMine: otherwise turn them off.
@@ -91,6 +93,21 @@ export function chooseStream({ mode, quality, last, groups, bingeGroup = null, r
   const pool = passing.length ? passing : all;
   const q = re(QUALITY[quality]);
   return (q && pool.find((s) => q.test(text(s)))) || pool[0] || null;
+}
+
+// Per-show overrides, shows_<pid>[metaId] = { audioLang, subLang ('off' = no subtitles), skip, delay: { [release]: seconds } },
+// laid over the profile's settings. Subtitle timing belongs to one release (it differs between rips), keyed by releaseKey.
+export const releaseKey = (s) => s?.behaviorHints?.bingeGroup
+  || /-([a-z0-9]{2,})(?:\.[a-z0-9]{2,4})?$/i.exec(s?.behaviorHints?.filename ?? '')?.[1] || s?.name || '';
+export function withShow(set, show, release = '') {
+  if (!show) return set;
+  const o = { ...set };
+  if (show.audioLang) o.audioLang = show.audioLang;
+  if (show.subLang === 'off') o.subOff = true;
+  else if (show.subLang) Object.assign(o, { subLang1: show.subLang, subLang2: '' });
+  if (show.skip) o.skip = show.skip;
+  if (show.delay?.[release] != null) o.subDelay = show.delay[release];
+  return o;
 }
 
 // Segments are { kind: 'intro' | 'recap' | 'outro', start, end } in seconds.

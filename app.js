@@ -1,5 +1,5 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
-import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel } from './playback.js';
+import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow } from './playback.js';
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
@@ -31,6 +31,14 @@ const library = () => load(pk('library'), []);
 const progress = () => load(pk('watch_progress'), {});
 const settings = () => ({ ...PLAYBACK_DEFAULTS, ...LOOK_DEFAULTS, ...load(pk('settings'), {}) });
 const setSetting = (k, v) => save(pk('settings'), { ...load(pk('settings'), {}), [k]: v });
+// Per-show overrides (see withShow); null or '' removes one, and a show with none left is dropped
+const shows = () => load(pk('shows'), {});
+function setShow(id, k, v) {
+  const all = shows(), s = { ...all[id] };
+  if (v == null || v === '') delete s[k]; else s[k] = v;
+  if (Object.keys(s).length) all[id] = s; else delete all[id];
+  save(pk('shows'), all);
+}
 
 // ---------- addon fetch ----------
 const manifests = new Map(); // url -> manifest | Error
@@ -340,7 +348,8 @@ async function details(type, id, pickVid) {
   app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${esc(s)}">Season ${esc(s)}</button>`).join('')}</div>
-        <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button></p><ol class="ep-list" id="eps"></ol></section>` : ''}
+        <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button></p><ol class="ep-list" id="eps"></ol>
+        <details class="show-prefs"><summary>Playback for this show</summary><div id="show-prefs"></div></details></section>` : ''}
       <section class="streams" id="streams"></section>
     </div><div id="extras"></div>`;
   extras(meta, type, set);
@@ -368,6 +377,25 @@ async function details(type, id, pickVid) {
     $('#mark').focus();
   };
   $('#mark').onclick = markSeason;
+  // This show's overrides: the skip choice is set here; languages and timing are remembered from the player and cleared here
+  const langName = (c) => LANGS[c]?.at(-1) ?? c;
+  const paintShow = () => {
+    const s = shows()[meta.id] ?? {};
+    const kept = [s.audioLang && ['audioLang', `Audio in ${langName(s.audioLang)}`],
+      s.subLang && ['subLang', s.subLang === 'off' ? 'Subtitles off' : `Subtitles in ${langName(s.subLang)}`],
+      ...Object.entries(s.delay ?? {}).map(([r, v]) => [`delay:${r}`, `Subtitles ${v > 0 ? '+' : ''}${v} s for the ${r.split('|').at(-1)} release`])].filter(Boolean);
+    $('#show-prefs').innerHTML = setRow('Intros and recaps', pills('showSkip', [['', 'Use my setting'], ['auto', 'Skip automatically'], ['button', 'Show Skip button'], ['off', 'Leave them']], s.skip ?? ''))
+      + (kept.length ? `<ul class="show-kept">${kept.map(([k, t]) => `<li><span>${esc(t)}</span><button class="btn quiet" data-clear="${esc(k)}" aria-label="Clear: ${esc(t)}">Clear</button></li>`).join('')}</ul>`
+        : '<p class="hint">Tick Remember for this show in the player’s audio or subtitle menu to keep a language or timing here.</p>');
+    app.querySelectorAll('[name=showSkip]').forEach((i) => (i.onchange = () => setShow(meta.id, 'skip', i.value || null)));
+    app.querySelectorAll('[data-clear]').forEach((b) => (b.onclick = () => {
+      const [k, r] = b.dataset.clear.split(/:(.*)/);
+      if (k === 'delay') { const d = { ...shows()[meta.id]?.delay }; delete d[r]; setShow(meta.id, 'delay', Object.keys(d).length ? d : null); } else setShow(meta.id, k, null);
+      paintShow();
+      $('.show-prefs summary').focus(); // the button you pressed is gone
+    }));
+  };
+  paintShow();
   $('#shuffle').onclick = () => {
     const out = eps.filter((v) => !v.released || Date.parse(v.released) <= Date.now());
     const v = out[Math.floor(Math.random() * out.length)];
@@ -603,10 +631,12 @@ function sendPlayerInfo() {
   const ep = eps.find((v) => v.id === ctx.videoId);
   const at = eps.indexOf(ep);
   const seen = progress();
-  const { player, externalPath, ...set } = settings();
+  const { player, externalPath, ...mine } = settings();
+  const sh = type === 'movie' ? null : shows()[meta.id] ?? {}, rk = releaseKey(stream);
+  const set = withShow(mine, sh, rk);
   if (set.discord && set.discordId) tauri.core.invoke('discord_set', { appId: set.discordId, details: meta.name, status: ep ? epLabel(ep.season, ep.episode ?? ep.number) : 'Movie', start: playing.started }).catch(() => {});
   return tauri.core.invoke('set_player_info', { info: {
-    settings: set, segments: playing.segments, videoId: ctx.videoId,
+    settings: set, show: sh && { audio: !!sh.audioLang, sub: !!sh.subLang, delay: sh.delay?.[rk] != null }, segments: playing.segments, videoId: ctx.videoId,
     name: meta.name, year: meta.releaseInfo ?? meta.year, runtime: meta.runtime, genres: meta.genres ?? meta.genre ?? [],
     rating: meta.imdbRating, description: meta.description, logo: meta.logo, poster: meta.poster,
     episode: ep && { label: epLabel(ep.season, ep.episode ?? ep.number), title: ep.name || ep.title, overview: ep.overview || ep.description },
@@ -629,6 +659,15 @@ tauri?.event.listen('player-request', async ({ payload: r }) => {
   const notify = (text) => tauri.event.emitTo('player', 'player-notice', text);
   if (r.type === 'settings') { // Style panel in the player: only subtitle keys, only the types the defaults have
     for (const [k, v] of Object.entries(r.patch ?? {})) if (k.startsWith('sub') && typeof v === typeof PLAYBACK_DEFAULTS[k]) setSetting(k, v);
+    return sendPlayerInfo();
+  }
+  if (r.type === 'show') { // "Remember for this show" in the player; timing is kept per release
+    const id = playing.meta.id, rk = releaseKey(playing.stream);
+    if (r.field === 'delay') {
+      const d = { ...shows()[id]?.delay };
+      if (typeof r.value === 'number') d[rk] = Math.max(-10, Math.min(10, r.value)); else delete d[rk];
+      setShow(id, 'delay', Object.keys(d).length ? d : null);
+    } else if (r.field === 'audioLang' || r.field === 'subLang') setShow(id, r.field, typeof r.value === 'string' ? r.value.slice(0, 8) : null);
     return sendPlayerInfo();
   }
   if (r.type === 'prefetch') { // near the end: load the next episode's stream lists now so the switch is instant.

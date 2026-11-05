@@ -354,6 +354,14 @@
   [aria-invalid=true] { border-color: var(--exit) !important; }
   /* details: the extras under episodes and streams */
   .season-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+  .show-prefs { margin: 20px 0 0; }
+  .show-prefs summary { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border-radius: 999px; color: var(--usher); cursor: pointer; transition: color 180ms ease; }
+  .show-prefs summary:hover, .show-prefs[open] summary { color: var(--screen); }
+  .show-prefs summary:focus-visible { outline: 2px solid var(--tungsten); outline-offset: 2px; }
+  .show-prefs > div { padding: 8px 14px 4px; }
+  .show-prefs .set-row { padding: 8px 0 0; border-top: 0; grid-template-columns: minmax(140px, 11rem) 1fr; }
+  .show-kept { list-style: none; margin: 12px 0 0; padding: 0; }
+  .show-kept li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px solid var(--aisle-2); }
   .extra { padding: 0 var(--gutter); margin-top: 40px; }
   .extra h2 { margin: 0 0 14px; font: 700 1.6rem/1 var(--display); }
   .extra .row { padding-inline: 0; }

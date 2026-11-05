@@ -1,6 +1,6 @@
 // node playback.test.mjs
 import assert from 'node:assert/strict';
-import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes, deadAt, failedLabel, DEAD_MS } from './playback.js';
+import { PLAYBACK_DEFAULTS, subProps, pickSub, pickAudio, videoProps, chooseStream, fromIntroDB, fromAniSkip, fromChapters, segmentAt, nextCardAt, sessionMinutes, deadAt, failedLabel, DEAD_MS, releaseKey, withShow, langKey } from './playback.js';
 
 const s = (name, url, bingeGroup) => ({ name, url, behaviorHints: bingeGroup ? { bingeGroup } : {} });
 const groups = [{ addonName: 'A', streams: [s('720p WEB', 'u720'), s('1080p WEB', 'u1080', 'grp'), s('2160p 4K', 'u2160')] }];
@@ -25,6 +25,19 @@ assert.equal(deadAt(dead, { url: 'u2160' }, now), 0, 'expired after 7 days');
 assert.equal(failedLabel(now - 30e3, now), 'Failed 1 min ago');
 assert.equal(failedLabel(now - 2 * 36e5, now), 'Failed 2 h ago');
 assert.equal(failedLabel(now - 3 * 864e5, now), 'Failed 3 d ago');
+
+// per-show overrides
+const base = { audioLang: 'en', subLang1: 'en', subLang2: 'es', skip: 'button' };
+assert.equal(withShow(base, undefined), base, 'no overrides: settings untouched');
+const ov = withShow(base, { audioLang: 'ja', subLang: 'en', skip: 'auto', delay: { NTb: 0.4 } }, 'NTb');
+assert.deepEqual([ov.audioLang, ov.subLang1, ov.subLang2, ov.skip, ov.subDelay], ['ja', 'en', '', 'auto', 0.4], 'show wins, one sub language');
+assert.equal(withShow(base, { delay: { NTb: 0.4 } }, 'FLUX').subDelay, undefined, 'timing belongs to its release only');
+assert.equal(withShow(base, { subLang: 'off' }).subOff, true, "'off' = no subtitles");
+assert.equal(base.audioLang, 'en', 'settings object not mutated');
+assert.equal(releaseKey({ behaviorHints: { bingeGroup: 'torrentio|1080p|NTb' } }), 'torrentio|1080p|NTb');
+assert.equal(releaseKey({ behaviorHints: { filename: 'Show.S01E02.1080p.WEB.h264-NTb.mkv' } }), 'NTb', 'release group from the file name');
+assert.equal(releaseKey({ name: 'Addon 720p' }), 'Addon 720p');
+assert.deepEqual([langKey('jpn'), langKey('en-US'), langKey('xx'), langKey(undefined)], ['ja', 'en', 'xx', '']);
 
 // skip segments: real response shapes captured 2026-11-04
 const introdb = { intro: { start_sec: 314.5, end_sec: 331 }, recap: null, outro: { start_sec: 2843, end_sec: 2901 } };

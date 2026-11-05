@@ -38,6 +38,37 @@ service cloud.firestore {
       allow list, get, delete: if admin();
     }
 
+    // people/<uid> = { name }: the friends directory ("Name friends see"). Every friend reads it; each account writes its own.
+    // shortcut: an uninvited account's entry stays listed (rules stop it reading or writing); add an admin cleanup if that confuses anyone.
+    match /people/{u} {
+      allow read: if invited();
+      allow create, update: if invited() && request.auth.uid == u
+        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40;
+      allow delete: if invited() && request.auth.uid == u || admin();
+    }
+
+    // inbox/<uid>/items/<auto id>: Send to a friend. Friends create, signed as themselves; only the owner reads and clears.
+    match /inbox/{u}/items/{id} {
+      allow create: if invited() && exists(/databases/$(database)/documents/people/$(u))
+        && request.resource.data.keys().hasOnly(['from', 'type', 'id', 'name', 'poster', 'note', 'at'])
+        && request.resource.data.from == request.auth.uid
+        && request.resource.data.type is string && request.resource.data.type.size() <= 20
+        && request.resource.data.id is string && request.resource.data.id.size() <= 200
+        && request.resource.data.name is string && request.resource.data.name.size() <= 200
+        && request.resource.data.poster is string && request.resource.data.poster.size() <= 1000
+        && request.resource.data.note is string && request.resource.data.note.size() <= 200
+        && request.resource.data.at is int;
+      allow read, delete: if invited() && request.auth.uid == u;
+    }
+
+    // activity/<uid> = { items: [{ type, id, name, poster, at }] }: "Friends are watching". Friends read; the owner writes its own.
+    match /activity/{u} {
+      allow read: if invited();
+      allow write: if invited() && request.auth.uid == u
+        && request.resource.data.keys().hasOnly(['items']) && request.resource.data.items is list && request.resource.data.items.size() <= 20;
+    }
+
     match /admins/{uid} {
       allow get: if request.auth != null && request.auth.uid == uid;
     }

@@ -1,6 +1,6 @@
 import { resourceUrl, supports, homeCatalogs, searchCatalogs, streamTarget, redactUrl } from './protocol.js';
 import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, chooseStream, fromIntroDB, fromAniSkip, sessionMinutes, DEAD_MS, deadAt, failedLabel, releaseKey, withShow, torboxKey, daysLeft } from './playback.js';
-import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport } from './sync.js';
+import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
   accentFromHex, isUnreleased, needsMeta, continueRows } from './look.js';
@@ -278,7 +278,7 @@ function fillCw(set) {
 }
 async function home() {
   const set = settings(), cats = homeCatalogs(activeAddons());
-  const rows = { cw: set.cw ? '<div id="cw-slot"></div>' : '', upcoming: set.cw && set.cwUpcoming ? '<div id="up-slot"></div>' : '' };
+  const rows = { cw: set.cw ? '<div id="cw-slot"></div>' : '', upcoming: set.cw && set.cwUpcoming ? '<div id="up-slot"></div>' : '', friends: '<div id="friends-slot"></div>', activity: '<div id="act-slot"></div>' };
   cats.forEach((c, i) => (rows[rowKey(c)] = row(set.rowNames[rowKey(c)] || rowTitle(c), c.manifest.name, '<div class="skeleton"></div>'.repeat(8), `row${i}`)));
   app.innerHTML = (set.hero || !cats.length ? `<section class="hero" id="hero">${cats.length ? '' : hero(
     { name: 'Nothing on the bill yet', description: 'Install an addon to fill your home screen with catalogs.' },
@@ -289,6 +289,7 @@ async function home() {
     const missing = needsMeta(progress(), set).filter((id) => !metaCache.has(id));
     if (missing.length) Promise.all(missing.map((id) => fetchMeta('series', id).then((m) => metaCache.set(id, m ?? {})))).then(() => fillCw(set));
   }
+  if (account) loadActivity(set);
   let heroFilled = !cats.length || !set.hero;
   cats.forEach(async (c, i) => {
     const el = $(`#row${i}`);
@@ -345,7 +346,7 @@ async function details(type, id, pickVid) {
   const tid = ytId(meta), set = settings();
   document.body.dataset.bg = set.detailBg === 'normal' ? '' : 'cinematic';
   if (set.detailBg === 'color' && meta.poster) tint(meta.poster, meta.id);
-  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>` })}</section>
+  app.innerHTML = `<section class="hero">${hero(meta, { withPoster: true, actions: `${type === 'movie' ? `<button class="btn primary" id="play">${progress()[meta.id] ? 'Resume' : 'Play'}</button>` : ''}${tid ? `<button class="btn${type === 'movie' ? '' : ' primary'}" id="trl"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7 4v16l13-8z"/></svg>Play trailer</button>` : ''}<button class="btn" id="lib" aria-pressed="${inLib}">${inLib ? 'Saved to library' : 'Save to library'}</button>${account ? '<button class="btn" id="send">Send to a friend</button>' : ''}` })}</section>
     <div class="detail-body">
       ${isSeries ? `<section class="episodes"><div class="seasons" role="tablist">${seasons.map((s) => `<button role="tab" data-s="${esc(s)}">Season ${esc(s)}</button>`).join('')}</div>
         <p class="season-tools"><button class="btn quiet" id="mark"></button><button class="btn quiet" id="shuffle">Play a random episode</button></p><ol class="ep-list" id="eps"></ol>
@@ -361,6 +362,7 @@ async function details(type, id, pickVid) {
       : [...library(), { id: meta.id, type, name: meta.name, poster: meta.poster, releaseInfo: meta.releaseInfo }]);
     details(type, id, pickVid); // stay on the episode you were looking at
   };
+  if ($('#send')) $('#send').onclick = () => sendDialog(meta, type);
   if ($('#play')) $('#play').onclick = () => streams(meta, type, meta.id, undefined, true);
   if (!isSeries) return void streams(meta, type, meta.id, undefined, auto);
   let watched = progress(), shown = null;
@@ -562,6 +564,7 @@ function play(ctx, stream, quiet = false) {
 }
 
 function record(ctx, stream, posSec, durSec) {
+  if (!finished(progress()[ctx.videoId]) && finished({ positionMs: posSec, durationMs: durSec })) onFinished(ctx);
   save(pk('watch_progress'), { ...progress(), [ctx.videoId]: { ...ctx, positionMs: posSec * 1000, durationMs: durSec * 1000, bingeGroup: stream.behaviorHints?.bingeGroup ?? null, stream, updatedAt: Date.now() } });
 }
 
@@ -838,7 +841,7 @@ const sec = (key, body) => `<section aria-labelledby="s-${key}" data-sec="${key}
   ${key === 'profile' ? '' : `<button class="btn quiet" data-reset="${key}">Reset to defaults</button>`}</div>${body}</section>`;
 
 const homeTitles = () => {
-  const titles = { cw: 'Continue watching', upcoming: 'Upcoming episodes' };
+  const titles = { cw: 'Continue watching', upcoming: 'Upcoming episodes', friends: 'From friends', activity: 'Friends are watching' };
   homeCatalogs(activeAddons()).forEach((c) => (titles[rowKey(c)] = `${rowTitle(c)}, from ${c.manifest.name}`));
   return titles;
 };
@@ -928,6 +931,9 @@ const sections = (set) => [
   sec('system', setRow('Updates', `${pills('updateChannel', [['stable', 'Stable'], ['beta', 'Beta']], set.updateChannel)}<p class="hint"><button class="btn quiet" id="upd">Check for updates</button> <span id="upd-msg" role="status"></span></p>`,
       'Beta gets new features first and can have rough edges.')
     + (torboxKey(addonUrls()) ? setRow('TorBox', '<p id="tb-msg" role="status">Checking…</p>', 'Read from your Torrentio addon link. Marquee warns you 7 days before the plan ends.') : '')
+    + setRow('Name friends see', '<input class="lang text" id="friend-name" maxlength="40" aria-label="Name friends see" spellcheck="false" autocomplete="off">',
+      'Shown when you send a friend something or share what you finish. Your email never is.')
+    + switchRow('shareFinished', 'Share what I finish', set.shareFinished, 'Friends see the movies and episodes this profile finishes in “Friends are watching”, for 7 days.')
     + switchRow('rememberProfile', 'Skip “Who’s watching?”', set.rememberProfile, 'Opens straight into the profile you used last.')
     + setRow('Discord status', sw('discord', set.discord) + (set.discord ? field('discordId', set.discordId, 'Application ID', 'Discord application ID') : ''),
       'Shows what you’re watching on your Discord profile. Needs the Discord app running and an application ID from discord.com/developers.')
@@ -984,6 +990,9 @@ function settingsView() {
     try { const v = await tauri.core.invoke('check_update', { channel: settings().updateChannel }); msg.textContent = v ? `Marquee ${v} is out. Choose Update now in the prompt to install it.` : 'You have the latest version.'; }
     catch (e) { msg.textContent = `Couldn’t check (${e}). Try again later.`; }
   };
+  const fname = $('#friend-name');
+  myName().then((n) => (fname.value = n ?? ''), () => (fname.placeholder = 'Offline'));
+  fname.onchange = () => { const n = fname.value.trim().slice(0, 40); if (n) setMyName(n).then(() => loadPeople()).catch(() => {}); else myName().then((x) => (fname.value = x ?? '')); };
   if ($('#tb-msg')) torbox().then((me) => { if ($('#tb-msg')) $('#tb-msg').textContent = me ? tbLine(me) : 'Couldn’t reach TorBox, or the key in your Torrentio link isn’t valid.'; });
   $('#alert-test').onclick = () => notify('New episode alerts are on', 'Marquee tells you here when a series in your library gets a new episode.');
   app.querySelectorAll('[data-jump]').forEach((b) => (b.onclick = () => document.getElementById(b.dataset.jump).scrollIntoView({ behavior: calm.matches ? 'auto' : 'smooth' })));
@@ -1253,9 +1262,9 @@ watch(
     launched = true;
     if (first && profiles().list.length > 1 && !settings().rememberProfile && location.hash !== '#/profiles') location.hash = '#/profiles'; // hashchange routes
     else { route(); if (first) setTimeout(resumeOffer, settings().intro && !calm.matches ? 2600 : 600); }
-    if (first) { checkAlerts(); checkDebrid(); }
+    if (first) { checkAlerts(); checkDebrid(); startFriends(user); }
   },
-  (code) => { account = null; loginView(code); },
+  (code) => { account = null; stopInbox(); inbox = []; activity = []; activityAt = 0; loginView(code); },
 );
 { // launch intro: plays over the loading app, removes itself; any click or key skips it
   const intro = $('#intro');
@@ -1337,6 +1346,77 @@ async function checkDebrid() { // at launch, once a day per PC, from 7 days befo
   localStorage.setItem('debrid_warned', today); // this PC only: never synced
   notify(d < 0 ? 'Your TorBox plan has ended' : `Your TorBox plan ends in ${d} day${d === 1 ? '' : 's'}`,
     'Debrid links stop playing when it ends. Renew at torbox.app.');
+}
+
+// ---------- friends: every invited account. "From friends" = your inbox (live, all profiles); "Friends are watching" = what they finished in the last 7 days ----------
+let inbox = [], stopInbox = () => {}, people = new Map(), activity = [], activityAt = 0;
+const friendName = (u) => people.get(u) ?? 'A friend';
+const loadPeople = async () => (people = new Map((await friends()).map((f) => [f.uid, f.name])));
+async function startFriends(user) {
+  stopInbox();
+  try { // offline launch: no friends until the next launch (shortcut: hook sync's retry if that matters)
+    if (!(await myName())) await setMyName(user.email.split('@')[0].slice(0, 40));
+    await loadPeople();
+    stopInbox = watchInbox(async (all, added) => {
+      inbox = all;
+      if (added.some((x) => !people.has(x.from))) await loadPeople().catch(() => {}); // a friend who joined after launch
+      added.forEach((x) => notify(`${friendName(x.from)} sent you ${x.name}`, x.note || 'It’s in “From friends” on Home.'));
+      fillFriends(settings());
+    });
+  } catch (e) { logLine('warn', ['friends unavailable:', String(e?.code ?? e)]); }
+}
+const friendCard = (x, line, key) => `<div class="friend-pick"><a class="poster" href="#/meta/${esc(x.type)}/${encodeURIComponent(x.id)}">
+  <span class="art"><img loading="lazy" src="${esc(x.poster)}" alt=""></span>
+  <span class="poster-title">${esc(x.name)}</span><span class="poster-year">${esc(line)}</span></a>
+  ${key ? `<button class="dismiss" data-dismiss="${esc(key)}" aria-label="Remove ${esc(x.name)} from From friends">×</button>` : ''}</div>`;
+function fillFriends(set) {
+  const box = $('#friends-slot'), act = $('#act-slot'), week = Date.now() - 7 * 864e5;
+  if (box) {
+    box.innerHTML = inbox.length ? row(set.rowNames.friends || 'From friends', '', inbox.map((x) => friendCard(x, `${friendName(x.from)}${x.note ? `: “${x.note}”` : ''}`, x.key)).join('')) : '';
+    box.querySelectorAll('[data-dismiss]').forEach((b) => (b.onclick = () => dismiss(b.dataset.dismiss).catch(() => {}))); // the listener redraws
+  }
+  if (act) {
+    const seenIds = new Set(), list = activity.flatMap((f) => f.items.filter((x) => x.at > week).map((x) => ({ ...x, who: friendName(f.uid) })))
+      .sort((a, b) => b.at - a.at).filter((x) => !seenIds.has(x.id) && seenIds.add(x.id));
+    act.innerHTML = list.length ? row(set.rowNames.activity || 'Friends are watching', '', list.map((x) => friendCard(x, `${x.who} finished ${x.ep ? `${x.ep}` : 'it'}`)).join('')) : '';
+  }
+}
+async function loadActivity(set) { // at most every 10 minutes: one read per friend
+  if (Date.now() - activityAt < 600e3) return fillFriends(set);
+  activityAt = Date.now();
+  activity = await friendActivity().catch(() => activity);
+  fillFriends(set);
+}
+// "Send to a friend" on the details page: pick friends, add a note.
+async function sendDialog(meta, type) {
+  const list = await loadPeople().then(() => [...people], () => null);
+  const d = document.createElement('dialog');
+  d.className = 'resume send';
+  d.setAttribute('aria-label', `Send ${meta.name} to a friend`);
+  d.innerHTML = `<form method="dialog"><h2>Send ${esc(meta.name)}</h2>
+    ${!list ? '<p class="hint">Couldn’t reach your friends list. Check your connection and try again.</p>'
+      : !list.length ? '<p class="hint">None of your friends has signed in to Marquee yet.</p>'
+      : `<fieldset class="send-to"><legend>To</legend>${list.map(([u, n]) => `<label><input type="checkbox" value="${esc(u)}"> ${esc(n)}</label>`).join('')}</fieldset>
+        <label for="send-note">Note (optional)</label><textarea id="send-note" maxlength="200" rows="3" placeholder="Why they’ll like it"></textarea>`}
+    <p class="hint" role="status" id="send-msg"></p>
+    <div class="actions">${list?.length ? '<button class="btn primary" value="send">Send</button>' : ''}<button class="btn" value="">Close</button></div></form>`;
+  d.onclose = () => d.remove();
+  d.querySelector('form').onsubmit = async (e) => {
+    if (e.submitter?.value !== 'send') return;
+    e.preventDefault();
+    const to = [...d.querySelectorAll('.send-to input:checked')].map((i) => i.value), msg = d.querySelector('#send-msg');
+    if (!to.length) return void (msg.textContent = 'Pick at least one friend.');
+    const item = { type, id: meta.id, name: meta.name ?? '', poster: meta.poster ?? '', note: d.querySelector('#send-note').value.trim().slice(0, 200) };
+    try { await Promise.all(to.map((u) => recommend(u, item))); d.close(); notify(`Sent ${meta.name}`, `To ${to.map(friendName).join(', ')}.`); }
+    catch (err) { msg.textContent = `Couldn’t send (${err.code ?? err}). Try again.`; }
+  };
+  document.body.append(d);
+  d.showModal();
+}
+// Called when something becomes finished: it leaves "From friends" and, if this profile shares, goes to "Friends are watching".
+function onFinished(ctx) {
+  inbox.filter((x) => x.id === ctx.metaId).forEach((x) => dismiss(x.key).catch(() => {}));
+  if (settings().shareFinished) shareFinished({ type: ctx.type, id: ctx.metaId, name: ctx.name ?? '', poster: ctx.poster ?? '', ...(ctx.season ? { ep: `S${ctx.season} E${ctx.episode}` } : {}), at: Date.now() }).catch(() => {});
 }
 
 // New episode alerts: only while Marquee is open, at launch and every 3 hours, for series in the library.

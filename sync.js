@@ -178,3 +178,25 @@ export const uninvite = (email) => deleteDoc(doc(db, 'allowlist', email));
 export const sendReport = (r) => addDoc(collection(db, 'reports'), { ...r, from: auth.currentUser?.email?.toLowerCase() ?? '' });
 export const reports = async () => (await getDocsFromServer(collection(db, 'reports'))).docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.at - a.at);
 export const deleteReport = (id) => deleteDoc(doc(db, 'reports', id));
+
+// Friends: every invited account is a friend. people/<uid> = { name }, inbox/<uid>/items/<auto id>, activity/<uid> = { items }.
+const listed = async (path) => (await getDocsFromServer(collection(db, path))).docs.filter((d) => d.id !== uid).map((d) => ({ uid: d.id, ...d.data() }));
+export const myName = async () => (uid ? (await getDoc(doc(db, 'people', uid))).data()?.name ?? null : null);
+export const setMyName = (name) => setDoc(doc(db, 'people', uid), { name });
+export const friends = () => listed('people');
+export const recommend = (to, item) => addDoc(collection(db, 'inbox', to, 'items'), { ...item, from: uid, at: Date.now() });
+export const dismiss = (key) => deleteDoc(doc(db, 'inbox', uid, 'items', key));
+// onChange(all, added): all = the inbox, newest first; added = items that arrived while listening (not the first load).
+export function watchInbox(onChange) {
+  let first = true;
+  return onSnapshot(collection(db, 'inbox', uid, 'items'), (snap) => {
+    const all = snap.docs.map((d) => ({ key: d.id, ...d.data() })).sort((a, b) => b.at - a.at);
+    onChange(all, first ? [] : snap.docChanges().filter((c) => c.type === 'added').map((c) => ({ key: c.doc.id, ...c.doc.data() })));
+    first = false;
+  }, (e) => console.warn('inbox listen failed', e.code));
+}
+export const friendActivity = () => listed('activity');
+export async function shareFinished(item) { // newest first, one entry per title, last 20
+  const ref = doc(db, 'activity', uid), items = (await getDoc(ref)).data()?.items ?? [];
+  await setDoc(ref, { items: [item, ...items.filter((x) => x.id !== item.id)].slice(0, 20) });
+}

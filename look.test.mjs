@@ -1,6 +1,6 @@
 // node look.test.mjs
 import assert from 'node:assert/strict';
-import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows } from './look.js';
+import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, orderRows, removeProfile, resetSection, newProfileId, accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList } from './look.js';
 
 // defaults the spec settled on
 assert.equal(LOOK_DEFAULTS.accent, 'tungsten');
@@ -88,3 +88,16 @@ assert.deepEqual(continueRows(prog, metas, { ...cwSet, cwUpcoming: false }, now)
 assert.deepEqual(continueRows(prog, metas, { cwNextUp: false, cwUpcoming: true }, now).resume.map((x) => x.videoId), ['m1']);
 
 console.log('look tests pass');
+
+// What can I watch in…
+assert.equal(runtimeMin('142 min'), 142);
+assert.equal(runtimeMin('2h 22min'), 142);
+assert.equal(runtimeMin('1h'), 60);
+assert.equal(runtimeMin('50'), 50);
+assert.equal(runtimeMin(45), 45);
+for (const bad of [null, undefined, '', 'N/A', '0 min', 0]) assert.equal(runtimeMin(bad), null, `unknown: ${bad}`);
+const fc = [{ id: 'a', left: 40, genres: ['Drama'] }, { id: 'b', left: 44.5, genres: ['Comedy'] }, { id: 'c', left: 130, genres: ['Drama'] }, { id: 'd', left: null, genres: ['Drama'] }];
+assert.deepEqual(fitList(fc, { max: 45 }).map((c) => c.id), ['b', 'a'], 'fits, longest first, unknown left out');
+assert.deepEqual(fitList(fc, { max: 45, genre: 'Drama' }).map((c) => c.id), ['a'], 'genre filter');
+assert.deepEqual(fitList(fc, { max: 0 }).map((c) => c.id), ['c', 'b', 'a'], 'any length');
+assert.deepEqual(fitList(fc, { max: 30 }), [], 'nothing fits');

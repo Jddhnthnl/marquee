@@ -3,7 +3,7 @@ import { PLAYBACK_DEFAULTS, LANGS, SUB_COLORS, SUB_FONTS, RULES, NEXT_WHEN, choo
 import { push, drop, watch, signIn, signUp, resetPassword, signOutAndForget, isAdmin, invites, invite, uninvite, sendReport, reports, deleteReport, myName, setMyName, friends, recommend, dismiss, watchInbox, friendActivity, shareFinished } from './sync.js';
 import { logLine, appLines, buildReport, MAX_LINES, MAX_NOTE } from './diag.js';
 import { LOOK_DEFAULTS, ACCENTS, AVATARS, PROFILE_COLORS, POSTER_SIZES, RADII, DETAIL_SECTIONS, orderRows, removeProfile, resetSection, newProfileId,
-  accentFromHex, isUnreleased, needsMeta, continueRows } from './look.js';
+  accentFromHex, isUnreleased, needsMeta, continueRows, runtimeMin, fitList } from './look.js';
 
 // Keep the app's own warnings and errors for Send diagnostics (they still reach the devtools console).
 for (const level of ['warn', 'error']) {
@@ -283,6 +283,7 @@ async function home() {
   app.innerHTML = (set.hero || !cats.length ? `<section class="hero" id="hero">${cats.length ? '' : hero(
     { name: 'Nothing on the bill yet', description: 'Install an addon to fill your home screen with catalogs.' },
     { actions: '<a class="btn primary" href="#/addons">Install an addon</a>' })}</section>` : '<div class="hero-gap"></div>')
+    + (library().length || set.cw ? `<div class="fit-home">${FIT_LINK}</div>` : '')
     + orderRows(Object.keys(rows), set.homeRows).filter((r) => r.shown).map((r) => rows[r.key]).join('');
   if (set.cw) {
     fillCw(set);
@@ -790,7 +791,50 @@ function libraryView() {
   const sort = LIB_SORT[settings().librarySort];
   const items = sort ? [...library()].sort(sort) : [...library()].reverse(); // added: newest first
   app.innerHTML = `<section class="page"><h1 class="page-title">Library</h1>
-    ${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : state('Titles you save show up here. Open any title and choose Save to library.')}</section>`;
+    ${items.length ? FIT_LINK : ''}${items.length ? `<div class="grid">${items.map(poster).join('')}</div>` : state('Titles you save show up here. Open any title and choose Save to library.')}</section>`;
+}
+
+// "What can I watch in…": Library + Continue watching, filtered by time (time left for half-watched) and genre.
+const FIT_LINK = '<p class="fit-link"><a class="btn quiet" href="#/fit">What can I watch in…</a></p>';
+const FIT_TIMES = [[30, '30 min'], [45, '45 min'], [60, '1 hour'], [90, '1½ hours'], [120, '2 hours'], [0, 'Any length']];
+let fitMax = 45, fitGenre = '';
+const metaOf = async (type, id) => metaCache.get(id) ?? metaCache.set(id, (await fetchMeta(type, id).catch(() => null)) ?? {}).get(id);
+async function fitCands() {
+  const set = settings(), prog = progress(), out = new Map();
+  await Promise.all(needsMeta(prog, set).map((id) => metaOf('series', id))); // next-up episodes come from the show's meta
+  for (const p of cwData(set).resume) {
+    const meta = await metaOf(p.type, p.metaId), left = p.durationMs ? (p.durationMs - p.positionMs) / 60000 : runtimeMin(meta.runtime);
+    out.set(p.metaId, { name: p.name, poster: p.poster, genres: meta.genres ?? [], left, started: p.durationMs > 0,
+      href: `#/meta/${esc(p.type)}/${encodeURIComponent(p.metaId)}${p.season != null ? `/${encodeURIComponent(p.videoId)}` : ''}`, ep: p.season ? epLabel(p.season, p.episode) : '' });
+  }
+  await Promise.all(library().filter((m) => !out.has(m.id) && !(m.type === 'movie' && finished(prog[m.id]))).map(async (m) => {
+    const meta = await metaOf(m.type, m.id); // series: addons list the episode length as the show's runtime
+    out.set(m.id, { name: m.name, poster: m.poster, genres: meta.genres ?? [], left: runtimeMin(meta.runtime), started: false,
+      href: `#/meta/${esc(m.type)}/${encodeURIComponent(m.id)}`, ep: m.type === 'movie' ? '' : 'An episode' });
+  }));
+  return [...out.values()];
+}
+async function fitView() {
+  const seq = routeSeq;
+  app.innerHTML = `<section class="page"><h1 class="page-title">What can I watch in…</h1>
+    <p class="lede">Titles from your Library and Continue watching that fit the time you have. Half-watched ones count by the time left.</p>
+    <div id="fit-controls" class="fit-controls"></div><div id="fit-out"><div class="grid">${'<div class="skeleton"></div>'.repeat(8)}</div></div></section>`;
+  const cands = await fitCands();
+  if (seq !== routeSeq) return;
+  const genres = [...new Set(cands.flatMap((c) => c.genres))].sort();
+  if (!genres.includes(fitGenre)) fitGenre = '';
+  $('#fit-controls').innerHTML = `<fieldset><legend>Time</legend>${pills('fitMax', FIT_TIMES, fitMax)}</fieldset>`
+    + (genres.length ? `<fieldset><legend>Genre</legend>${pills('fitGenre', [['', 'Any genre'], ...genres.map((g) => [esc(g), esc(g)])], esc(fitGenre))}</fieldset>` : '');
+  const draw = () => {
+    const list = fitList(cands, { max: fitMax, genre: fitGenre }), unknown = cands.filter((c) => c.left == null).length;
+    $('#fit-out').innerHTML = (list.length ? `<div class="grid">${list.map((c) => `<a class="poster" href="${c.href}">${art(c.poster)}
+      <span class="poster-title">${esc(c.name)}</span><span class="poster-year">${c.ep ? `${esc(c.ep)} · ` : ''}${Math.round(c.left)} min${c.started ? ' left' : ''}</span></a>`).join('')}</div>`
+      : state(cands.length ? `Nothing fits ${fitMax ? `in ${FIT_TIMES.find(([v]) => v === fitMax)[1]}` : ''}${fitGenre ? ` in ${esc(fitGenre)}` : ''}. Try more time or another genre.`
+        : 'Save titles to your Library or start watching something, and they’ll show up here.'))
+      + (unknown ? `<p class="hint">${unknown} title${unknown === 1 ? ' doesn’t' : 's don’t'} list a running time, so ${unknown === 1 ? 'it’s' : 'they’re'} left out.</p>` : '');
+  };
+  app.querySelectorAll('#fit-controls input').forEach((i) => (i.onchange = () => { if (i.name === 'fitMax') fitMax = +i.value; else fitGenre = i.value; draw(); }));
+  draw();
 }
 
 function profilesView() {
@@ -1183,6 +1227,7 @@ async function route() {
     if (view === 'meta') return details(a, decodeURIComponent(b), c && decodeURIComponent(c));
     if (view === 'addons') return addonsView();
     if (view === 'library') return libraryView();
+    if (view === 'fit') return fitView();
     if (view === 'profiles') return profilesView();
     if (view === 'settings') return settingsView();
     return home();

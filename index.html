@@ -167,7 +167,12 @@
   .skeleton { flex: 0 0 var(--poster); aspect-ratio: 2/3; border-radius: var(--r);
               background: linear-gradient(100deg, var(--aisle) 40%, var(--aisle-2) 50%, var(--aisle) 60%) 0 0/300% 100%; animation: shimmer 1.6s linear infinite; }
   .skeleton.line { aspect-ratio: auto; height: 58px; margin-bottom: 8px; border-radius: 6px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--poster), 1fr)); gap: 24px 14px; }
+  .fit-link { margin: 14px 0 22px; }
+  .fit-home { padding: 0 var(--gutter); }
+  .fit-home .fit-link { margin: 0 0 8px; }
+  .fit-controls { display: grid; gap: 14px; margin: 22px 0 28px; }
+  .fit-controls fieldset { margin: 0; padding: 0; border: 0; }
+  .fit-controls legend { margin-bottom: 8px; color: var(--usher); font-size: .9rem; }  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--poster), 1fr)); gap: 24px 14px; }
   .grid .poster { width: auto; }
 
   /* ---- pages ---- */

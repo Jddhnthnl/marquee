@@ -113,3 +113,15 @@ export function continueRows(prog, metas, set, now = Date.now()) {
   }
   return { resume, upcoming };
 }
+
+// "What can I watch in…": addon runtime text ("142 min", "2h 22min", "1h", "50") → minutes; null when unknown.
+export function runtimeMin(r) {
+  if (typeof r === 'number') return r > 0 ? r : null;
+  const s = String(r ?? ''), h = /(\d+)\s*h/i.exec(s), m = /(\d+)\s*m/i.exec(s);
+  if (h || m) return +(h?.[1] ?? 0) * 60 + +(m?.[1] ?? 0) || null;
+  return /^\s*\d+\s*$/.test(s) ? +s || null : null;
+}
+// cands: { left (minutes, null = unknown), genres }. max 0 = any length. Longest that still fits first: it fills the time you have.
+export const fitList = (cands, { max = 0, genre = '' } = {}) => cands
+  .filter((c) => c.left != null && (!max || c.left <= max) && (!genre || c.genres.includes(genre)))
+  .sort((a, b) => b.left - a.left);

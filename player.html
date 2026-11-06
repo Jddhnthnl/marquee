@@ -15,7 +15,7 @@
   button { font: inherit; color: inherit; }
   :focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
 
-  #stage { position: fixed; inset: 0; }
+  #stage { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
   .chrome { transition: opacity .3s ease; }
   header, footer { transition: opacity .3s ease, translate .4s cubic-bezier(.2,.8,.2,1); }
   body.idle .chrome { opacity: 0; pointer-events: none; }
@@ -753,7 +753,38 @@ $('#stage').addEventListener('click', () => {
   clearTimeout(clickTimer);
   clickTimer = setTimeout(() => { togglePause(); flash(s.pause ? 'pause' : 'play'); }, 220);
 });
-$('#stage').addEventListener('dblclick', () => { clearTimeout(clickTimer); toggleFull(); });
+let touch = null, swiped = false, held = false, holdT;
+$('#stage').addEventListener('dblclick', (e) => {
+  clearTimeout(clickTimer);
+  if (!touch) return toggleFull();
+  const d = e.clientX < innerWidth / 2 ? -10 : 10;
+  cmd('seek', d); toast(`${d > 0 ? '+' : ''}${d}s`);
+});
+// Touch: vertical swipe = brightness (left half) / volume (right half), hold = 2x speed
+$('#stage').addEventListener('pointerdown', (e) => {
+  touch = e.pointerType === 'touch' ? { x: e.clientX, y: e.clientY, left: e.clientX < innerWidth / 2, v: s.volume, b: null } : null;
+  swiped = held = false;
+  if (touch) holdT = setTimeout(() => { held = true; cmd('set_property', 'speed', 2); toast('2×', 5000); }, 500);
+});
+$('#stage').addEventListener('pointermove', async (e) => {
+  if (!touch) return;
+  const dy = touch.y - e.clientY;
+  if (!swiped && Math.abs(dy) < 14) return;
+  if (Math.abs(e.clientX - touch.x) > Math.abs(dy) && !swiped) { clearTimeout(holdT); return; }
+  swiped = true; clearTimeout(holdT);
+  const r = dy / (innerHeight * 0.6);
+  if (touch.left) {
+    touch.b ??= await invoke('brightness', {}).catch(() => 0.5);
+    const b = Math.max(0.05, Math.min(1, touch.b + r));
+    invoke('brightness', { value: b }).catch(() => {}); toast(`Brightness ${Math.round(b * 100)}%`);
+  } else {
+    const v = Math.max(0, Math.min(100, Math.round(touch.v + r * 100)));
+    cmd('set_property', 'volume', v); localStorage.setItem('player_volume', v); toast(`Volume ${v}%`);
+  }
+});
+const touchEnd = () => { clearTimeout(holdT); if (held) { cmd('set_property', 'speed', 1); toast('1×'); } };
+$('#stage').addEventListener('pointerup', touchEnd); $('#stage').addEventListener('pointercancel', touchEnd);
+$('#stage').addEventListener('click', (e) => { if (swiped || held) { swiped = held = false; e.stopImmediatePropagation(); clearTimeout(clickTimer); } }, true);
 $('#stage').addEventListener('wheel', (e) => nudgeVolume(e.deltaY < 0 ? 5 : -5), { passive: true });
 
 function flash(id) { const f = $('#flash'); icon(f, id); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); }

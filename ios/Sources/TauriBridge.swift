@@ -211,6 +211,16 @@ final class TauriBridge: NSObject, WKScriptMessageHandler {
             }
             resolve(id: id, webView: webView, result: NSNull())
 
+        case "haptic":
+            DispatchQueue.main.async { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            resolve(id: id, webView: webView, result: NSNull())
+
+        case "brightness":
+            DispatchQueue.main.async {
+                if let v = (args["value"] as? NSNumber)?.doubleValue { UIScreen.main.brightness = CGFloat(min(1, max(0.05, v))) }
+                self.resolve(id: id, webView: webView, result: Double(UIScreen.main.brightness))
+            }
+
         case "discord_clear", "discord_set", "notify", "check_update":
             resolve(id: id, webView: webView, result: NSNull())
 

@@ -23,7 +23,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Marquee
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBg
         UIBackgroundModes: [audio]
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true

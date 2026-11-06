@@ -359,6 +359,8 @@ async function details(type, id, pickVid) {
       <section class="streams" id="streams"></section>
     </div><div id="extras"></div>`;
   extras(meta, type, set);
+  app.insertAdjacentHTML('beforeend', `<div class="dbar"><button class="btn primary" id="dbar">${type === 'movie' ? (progress()[meta.id] ? 'Resume' : 'Play') : 'Choose an episode'}</button></div>`);
+  $('#dbar').onclick = () => ($('#play') ?? $('#eps') ?? $('#streams'))?.[type === 'movie' ? 'click' : 'scrollIntoView']?.({ behavior: 'smooth', block: 'center' });
   const auto = autoStart && autoStart === (pickVid ?? meta.id);
   if (auto) autoStart = null;
   if (tid) $('#trl').onclick = () => screening(tid, meta.name);
@@ -1954,3 +1956,49 @@ function depth() {
 }
 addEventListener('pointermove', (e) => { ptr = e; frame ||= requestAnimationFrame(depth); }, { passive: true });
 document.documentElement.addEventListener('pointerleave', untilt);
+
+// ---------- touch: haptics, long-press sheet (the hover card's stand-in), pull-to-refresh, image fade-in ----------
+const buzz = () => { navigator.vibrate?.(10); tauri?.core.invoke('haptic', {}).catch(() => {}); };
+document.addEventListener('load', (e) => { if (e.target.tagName === 'IMG') e.target.classList.add('ld'); }, true);
+document.addEventListener('error', (e) => { if (e.target.tagName === 'IMG') e.target.classList.add('ld'); }, true);
+
+function posterSheet(a) {
+  const m = seen.get(decodeURIComponent(a.getAttribute('href').split('/').pop()));
+  if (!m) return;
+  buzz();
+  const inLib = library().some((x) => x.id === m.id);
+  const s = document.createElement('div');
+  s.className = 'sheet';
+  s.innerHTML = `<div role="dialog" aria-label="${esc(m.name)}"><h3>${esc(m.name)}</h3>${m.description ? `<p>${esc(m.description)}</p>` : ''}
+    <div class="actions"><a class="btn primary" href="${esc(a.getAttribute('href'))}">Open</a><button class="btn" id="sheet-lib">${inLib ? 'Remove from library' : 'Add to library'}</button></div></div>`;
+  const close = () => s.remove();
+  s.onclick = (e) => { if (e.target === s || e.target.closest('a')) close(); };
+  s.querySelector('#sheet-lib').onclick = () => {
+    save(pk('library'), inLib ? library().filter((x) => x.id !== m.id) : [...library(), { id: m.id, type: m.type, name: m.name, poster: m.poster, releaseInfo: m.releaseInfo }]);
+    traktSync(); buzz(); close();
+  };
+  document.body.append(s);
+}
+let lp = 0, lpHit = false, lpXY = null;
+app.addEventListener('pointerdown', (e) => {
+  const a = e.pointerType === 'touch' && e.target.closest('.poster[href]');
+  if (!a) return;
+  lpHit = false; lpXY = [e.clientX, e.clientY];
+  lp = setTimeout(() => { lpHit = true; posterSheet(a); }, 450);
+});
+const lpCancel = () => clearTimeout(lp);
+app.addEventListener('pointerup', lpCancel); app.addEventListener('pointercancel', lpCancel);
+app.addEventListener('pointermove', (e) => { if (lpXY && Math.hypot(e.clientX - lpXY[0], e.clientY - lpXY[1]) > 10) lpCancel(); });
+app.addEventListener('click', (e) => { if (lpHit) { lpHit = false; e.preventDefault(); e.stopPropagation(); } }, true);
+app.addEventListener('contextmenu', (e) => { if (e.target.closest('.poster')) e.preventDefault(); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape') $('.sheet')?.remove(); });
+
+let pullY = 0, pull = null;
+addEventListener('touchstart', (e) => { pullY = scrollY === 0 && (location.hash === '' || location.hash === '#/') ? e.touches[0].clientY : -1; }, { passive: true });
+addEventListener('touchmove', (e) => {
+  if (pullY < 0) return;
+  const on = e.touches[0].clientY - pullY > 90;
+  if (on && !pull) { pull = document.createElement('div'); pull.className = 'ptr'; pull.textContent = 'Release to refresh'; document.body.append(pull); requestAnimationFrame(() => pull?.classList.add('on')); buzz(); }
+  if (!on && pull) { pull.remove(); pull = null; }
+}, { passive: true });
+addEventListener('touchend', () => { if (pull) { pull.remove(); pull = null; route(); } pullY = -1; });

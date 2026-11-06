@@ -10,6 +10,7 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+mod torrent;
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_notification::NotificationExt;
@@ -447,6 +448,7 @@ fn main() {
         .manage(Player::default())
         .manage(DiscordState::default())
         .manage(Downloads::default())
+        .manage(torrent::Torrents::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -464,9 +466,10 @@ fn main() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, torbox_me, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log, dl_start, dl_stop, dl_delete, video_dir, pick_dir])
-        .run(tauri::generate_context!())
-        .expect("error while running Marquee");
+        .invoke_handler(tauri::generate_handler![play_mpv, mpv_cmd, mpv_state, toggle_fullscreen, set_player_info, player_info, introdb, torbox_me, open_external, pick_exe, check_update, notify, discord_set, discord_clear, mpv_log, dl_start, dl_stop, dl_delete, video_dir, pick_dir, torrent::torrent_start, torrent::torrent_stop])
+        .build(tauri::generate_context!())
+        .expect("error while building Marquee")
+        .run(|_, e| if let tauri::RunEvent::Exit = e { let _ = std::fs::remove_dir_all(torrent::dir()); });
 }
 
 #[cfg(test)]

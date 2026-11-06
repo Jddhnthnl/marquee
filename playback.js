@@ -2,7 +2,7 @@
 
 export const PLAYBACK_DEFAULTS = { player: 'marquee', externalPath: '', streamMode: 'reuse', quality: '1080p', nextDelay: 10, nextWhen: 'credits', stillWatching: 3, skip: 'button',
   // Streams
-  rules: [], customRule: '', streamWait: -1, sameGroup: true,
+  rules: [], customRule: '', streamWait: -1, sameGroup: true, torrent: false,
   // Player
   audioLang: '', holdSpeed: 2, showRemaining: true, fit: 'fit', brightness: 0, contrast: 0, saturation: 0, gamma: 0, deband: false,
   // Subtitles

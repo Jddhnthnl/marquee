@@ -30,8 +30,7 @@ jobs:
       - name: Build unsigned
         run: |
           cd ios
-          VER=0.0.1
-          [[ "$GITHUB_REF" == refs/tags/v* ]] && VER="${GITHUB_REF_NAME#v}"
+          VER=$(node -p 'require("../src-tauri/tauri.conf.json").version')
           xcodebuild -project Marquee.xcodeproj -scheme Marquee -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" MARKETING_VERSION="$VER" build
@@ -61,17 +60,15 @@ jobs:
           done
           gh release create "${{ github.ref_name }}" ios/Marquee.ipa --title "Marquee ${{ github.ref_name }}" || gh release upload "${{ github.ref_name }}" ios/Marquee.ipa --clobber
       - name: Publish the SideStore / AltStore source
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           export SIZE=$(stat -f%z ios/Marquee.ipa)
           node -e '
-            const e = process.env, v = e.TAG.replace(/^v/, ""), date = new Date().toISOString();
-            const dl = `https://github.com/${e.REPO}/releases/download/${e.TAG}/Marquee.ipa`;
-            const size = Number(e.SIZE), desc = `Marquee ${e.TAG}`;
+            const e = process.env, v = require("./src-tauri/tauri.conf.json").version, date = new Date().toISOString();
+            const dl = `https://github.com/${e.REPO}/releases/download/web-latest/Marquee.ipa`;
+            const size = Number(e.SIZE), desc = `Marquee ${v}`;
             console.log(JSON.stringify({ name: "Marquee", identifier: "dev.marquee.source", apps: [{
               name: "Marquee", bundleIdentifier: "dev.marquee.app", developerName: "Marquee",
               subtitle: "Stream your library", localizedDescription: "Marquee for iOS",
@@ -80,4 +77,4 @@ jobs:
             }] }, null, 2));
           ' > source.json
           gh release view web-latest >/dev/null 2>&1 || gh release create web-latest --prerelease --title "Web OTA (rolling)" --notes "Rolling web bundle the iOS app downloads on launch. Not a versioned release."
-          gh release upload web-latest source.json --clobber
+          gh release upload web-latest source.json ios/Marquee.ipa --clobber

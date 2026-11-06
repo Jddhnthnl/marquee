@@ -27,7 +27,7 @@ final class PlayerViewController: UIViewController {
         field.addTarget(self, action: #selector(play), for: .editingDidEndOnExit)
         status.textColor = .white
         status.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        status.numberOfLines = 4
+        status.numberOfLines = 9
         status.text = "Marquee iOS spike: paste a stream URL and press Go"
         playButton.setTitle("Play", for: .normal)
         playButton.setTitleColor(.white, for: .normal)
@@ -45,13 +45,13 @@ final class PlayerViewController: UIViewController {
         metalLayer.frame = view.bounds
         field.frame = CGRect(x: 12, y: safe.top + 8, width: view.bounds.width - 96, height: 36)
         playButton.frame = CGRect(x: view.bounds.width - 76, y: safe.top + 8, width: 64, height: 36)
-        status.frame = CGRect(x: 12, y: view.bounds.height - safe.bottom - 70, width: view.bounds.width - 24, height: 62)
+        status.frame = CGRect(x: 12, y: view.bounds.height - safe.bottom - 150, width: view.bounds.width - 24, height: 142)
     }
 
     private func setupMpv() {
         guard let h = mpv_create() else { status.text = "mpv_create failed"; return }
         mpv = h
-        mpv_request_log_messages(h, "warn")
+        mpv_request_log_messages(h, "info")
         mpv_set_option(h, "wid", MPV_FORMAT_INT64, &metalLayer)
         for (k, v) in [("vo", "gpu-next"), ("gpu-api", "vulkan"), ("gpu-context", "moltenvk"),
                        ("hwdec", "videotoolbox"), ("video-rotate", "no"), ("keep-open", "yes")] {
@@ -74,7 +74,14 @@ final class PlayerViewController: UIViewController {
         status.text = rc < 0 ? "loadfile failed: \(String(cString: mpv_error_string(rc)))" : "loading..."
     }
 
-    private func show(_ text: String) { DispatchQueue.main.async { self.status.text = text } }
+    private var lines: [String] = []
+
+    private func show(_ text: String) {
+        DispatchQueue.main.async {
+            self.lines = Array((self.lines + [text]).suffix(9))
+            self.status.text = self.lines.joined(separator: "\n")
+        }
+    }
 
     private func eventLoop(_ h: OpaquePointer) {
         while true {

@@ -25,6 +25,10 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         }
     }
 
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .lightContent
+    }
+
     override var prefersStatusBarHidden: Bool {
         return isPlaying || isFullscreen
     }

@@ -37,12 +37,15 @@
     display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
   @media (prefers-reduced-motion: reduce) { #watching, body.watching #watching { transition: none; } }
 
-  header { position: fixed; inset: 0 0 auto; display: flex; align-items: center; gap: 18px; padding: 22px 30px 70px;
+  header { position: fixed; inset: 0 0 auto; display: flex; align-items: center; gap: 18px;
+    padding: calc(22px + env(safe-area-inset-top, 0px)) calc(30px + env(safe-area-inset-right, 0px)) 70px calc(30px + env(safe-area-inset-left, 0px));
     background: linear-gradient(rgba(20,32,42,.82), transparent); }
   h1 { margin: 0; font: 800 clamp(28px, 3.6vw, 52px)/.95 'Big Shoulders Display', sans-serif; letter-spacing: .005em;
     text-shadow: 0 2px 20px rgba(0,0,0,.4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  footer { position: fixed; inset: auto 0 0; padding: 90px 30px 20px; background: linear-gradient(transparent, rgba(20,32,42,.94) 70%); }
+  footer { position: fixed; inset: auto 0 0;
+    padding: 90px calc(30px + env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) calc(30px + env(safe-area-inset-left, 0px));
+    background: linear-gradient(transparent, rgba(20,32,42,.94) 70%); }
   .timeline { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 20px; }
   .clock { font: 600 36px/1 'Big Shoulders Display', sans-serif; font-variant-numeric: tabular-nums; min-width: 3.6ch; }
   .remain { font: 600 24px/1 'Big Shoulders Display', sans-serif; font-variant-numeric: tabular-nums; color: var(--dim);
@@ -204,7 +207,18 @@
   .still { position: fixed; inset: 0; display: grid; place-content: center start; gap: 18px; padding: 0 8vw; background: rgba(20,32,42,.9); }
   .still h2 { margin: 0; max-width: 18ch; font: 800 clamp(40px, 6vw, 84px)/.92 'Big Shoulders Display', sans-serif; }
   .still div { display: flex; gap: 10px; }
-  @media (max-width: 760px) { .vol input, .sep { display: none; } .clock { font-size: 28px; } footer, header { padding-inline: 16px; } }
+  @media (max-width: 760px) {
+    .vol input, .sep { display: none; }
+    .clock { font-size: 28px; }
+    header {
+      padding-top: calc(14px + env(safe-area-inset-top, 0px));
+      padding-inline: calc(16px + env(safe-area-inset-left, 0px)) calc(16px + env(safe-area-inset-right, 0px));
+    }
+    footer {
+      padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      padding-inline: calc(16px + env(safe-area-inset-left, 0px)) calc(16px + env(safe-area-inset-right, 0px));
+    }
+  }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 </style>
 </head>

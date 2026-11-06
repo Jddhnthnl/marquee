@@ -3,12 +3,27 @@
 name: ios
 on:
   workflow_dispatch:
+  push:
+    tags: ['v*']
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: write
 
 jobs:
   ipa:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare web assets
+        env:
+          TRAKT_ID: ${{ secrets.TRAKT_ID }}
+        run: |
+          mkdir -p ios/Web
+          cp index.html player.html app.js protocol.js sync.js playback.js look.js trakt.js diag.js icon.svg icon-512.png manifest.webmanifest sw.js ios/Web/
+          node -e 'console.log("export default " + JSON.stringify({ id: process.env.TRAKT_ID || "" }) + ";")' > ios/Web/trakt-config.js
       - name: Generate the Xcode project
         run: brew install xcodegen && cd ios && xcodegen generate
       - name: Build unsigned
@@ -27,3 +42,18 @@ jobs:
         with:
           name: Marquee-ipa
           path: ios/Marquee.ipa
+      - name: Attach IPA to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in {1..30}; do
+            if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+              gh release upload "${{ github.ref_name }}" ios/Marquee.ipa --clobber
+              echo "Uploaded Marquee.ipa to release ${{ github.ref_name }}"
+              exit 0
+            fi
+            echo "Waiting for release ${{ github.ref_name }}..."
+            sleep 10
+          done
+          gh release create "${{ github.ref_name }}" ios/Marquee.ipa --title "Marquee ${{ github.ref_name }}" || gh release upload "${{ github.ref_name }}" ios/Marquee.ipa --clobber

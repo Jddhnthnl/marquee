@@ -11,7 +11,10 @@ targets:
   Marquee:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources:
+      - Sources
+      - path: Web
+        type: folder
     dependencies:
       - package: MPVKit
         product: MPVKit

@@ -9,7 +9,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         window = UIWindow(frame: UIScreen.main.bounds)
-        window?.rootViewController = PlayerViewController()
+        window?.rootViewController = MainViewController()
         window?.makeKeyAndVisible()
         return true
     }

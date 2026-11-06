@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Marquee player</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
@@ -416,7 +417,7 @@ $('#up-cancel').onclick = () => hideCard('done');
 $('#still-yes').onclick = () => { $('#still').hidden = true; playNext(false); };
 $('#still-no').onclick = () => quit();
 // any real input means someone is there (capture: runs before the button handlers above)
-addEventListener('pointerdown', () => { autoRun = 0; }, true);
+addEventListener('pointerdown', () => { autoRun = 0; wake(); }, true);
 addEventListener('keydown', () => { autoRun = 0; }, true);
 
 // Picture size: mpv keeps the film's shape (fit), crops to fill the screen, or stretches it

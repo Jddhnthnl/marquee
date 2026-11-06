@@ -48,13 +48,14 @@ enum WebUpdater {
         try? fm.removeItem(at: booting)
     }
 
-    static func checkForUpdate(runningVersion: Int) async {
+    @discardableResult
+    static func checkForUpdate(runningVersion: Int) async -> Bool {
         do {
             var req = URLRequest(url: base.appendingPathComponent("web-manifest.json"), cachePolicy: .reloadIgnoringLocalCacheData)
             req.timeoutInterval = 15
             let (data, _) = try await URLSession.shared.data(for: req)
             let m = try JSONDecoder().decode(Manifest.self, from: data)
-            guard m.version > max(runningVersion, version(of: next)), !m.files.isEmpty else { return }
+            guard m.version > max(runningVersion, version(of: next)), !m.files.isEmpty else { return false }
 
             try? fm.removeItem(at: staging)
             try fm.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -67,8 +68,10 @@ enum WebUpdater {
             try String(m.version).write(to: staging.appendingPathComponent("web-version.txt"), atomically: true, encoding: .utf8)
             try? fm.removeItem(at: next)
             try fm.moveItem(at: staging, to: next)
+            return true
         } catch {
             try? fm.removeItem(at: staging)
+            return false
         }
     }
 }

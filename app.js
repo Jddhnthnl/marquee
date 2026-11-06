@@ -2023,3 +2023,12 @@ addEventListener('touchmove', (e) => {
   if (!on && pull) { pull.remove(); pull = null; }
 }, { passive: true });
 addEventListener('touchend', () => { if (pull) { pull.remove(); pull = null; route(); } pullY = -1; });
+
+// iOS app: the shell downloaded a newer web bundle; it applies after a full restart.
+window.addEventListener('marquee-ota', () => {
+  const t = document.createElement('div');
+  t.textContent = 'Update downloaded. Close and reopen Marquee to apply it.';
+  t.style.cssText = 'position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:99999;max-width:90vw;padding:10px 16px;border-radius:12px;background:#222;color:#fff;font:14px system-ui;box-shadow:0 4px 20px #0008';
+  document.body.append(t);
+  setTimeout(() => t.remove(), 6000);
+});

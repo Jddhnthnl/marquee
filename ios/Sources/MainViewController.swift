@@ -103,7 +103,13 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         bundledRoot = Bundle.main.url(forResource: "Web", withExtension: nil) ?? Bundle.main.bundleURL
         let webRoot = WebUpdater.root(bundled: bundledRoot)
         let running = WebUpdater.version(of: webRoot)
-        Task.detached { await WebUpdater.checkForUpdate(runningVersion: running) }
+        Task.detached { [weak self] in
+            if await WebUpdater.checkForUpdate(runningVersion: running) {
+                DispatchQueue.main.async {
+                    self?.mainWebView.evaluateJavaScript("window.dispatchEvent(new Event('marquee-ota'))", completionHandler: nil)
+                }
+            }
+        }
 
         let s = WebServer(root: webRoot)
         self.server = s

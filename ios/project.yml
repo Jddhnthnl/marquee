@@ -2,7 +2,7 @@ name: Marquee
 options:
   bundleIdPrefix: dev.marquee
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
 packages:
   MPVKit:
     url: https://github.com/mpvkit/MPVKit

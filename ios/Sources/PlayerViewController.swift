@@ -58,8 +58,10 @@ final class PlayerViewController: UIViewController {
     @objc private func play() {
         field.resignFirstResponder()
         guard let h = mpv, let url = field.text, !url.isEmpty else { return }
-        var args: [UnsafePointer<CChar>?] = ["loadfile", url, "replace"].map { UnsafePointer(strdup($0)) } + [nil]
-        defer { args.forEach { if let p = $0 { free(UnsafeMutablePointer(mutating: p)) } } }
+        let owned: [UnsafeMutablePointer<CChar>?] = ["loadfile", url, "replace"].map { strdup($0) }
+        var args: [UnsafePointer<CChar>?] = owned.map { UnsafePointer<CChar>($0) }
+        args.append(nil)
+        defer { owned.forEach { free($0) } }
         let rc = mpv_command(h, &args)
         status.text = rc < 0 ? "loadfile failed: \(String(cString: mpv_error_string(rc)))" : "loading..."
     }

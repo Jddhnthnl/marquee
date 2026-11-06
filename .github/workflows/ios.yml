@@ -30,7 +30,7 @@ jobs:
       - name: Build unsigned
         run: |
           cd ios
-          VER=$(node -p 'require("../src-tauri/tauri.conf.json").version')
+          VER=$(node -p 'require("../src-tauri/tauri.conf.json").version').$GITHUB_RUN_NUMBER
           xcodebuild -project Marquee.xcodeproj -scheme Marquee -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" MARKETING_VERSION="$VER" build
@@ -66,7 +66,7 @@ jobs:
         run: |
           export SIZE=$(stat -f%z ios/Marquee.ipa)
           node -e '
-            const e = process.env, v = require("./src-tauri/tauri.conf.json").version, date = new Date().toISOString();
+            const e = process.env, v = e.VER, date = new Date().toISOString();
             const dl = `https://github.com/${e.REPO}/releases/download/web-latest/Marquee.ipa`;
             const size = Number(e.SIZE), desc = `Marquee ${v}`;
             console.log(JSON.stringify({ name: "Marquee", identifier: "dev.marquee.source", apps: [{

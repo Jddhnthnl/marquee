@@ -1,7 +1,7 @@
 import UIKit
 import WebKit
 
-final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessionDelegate {
+final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessionDelegate, WKNavigationDelegate {
     private var metalLayer = MetalLayer()
     private(set) var mpvSession: MpvSession?
     private var server: WebServer?
@@ -11,6 +11,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
     private var playerWebView: WKWebView!
     private var activePlayInvokeId: Int?
     private var playerUrl: URL?
+    private var bundledRoot: URL!
 
     private var isPlaying = false {
         didSet {
@@ -77,6 +78,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         mainWebView.isOpaque = true
         mainWebView.backgroundColor = .black
         mainWebView.scrollView.contentInsetAdjustmentBehavior = .never
+        mainWebView.navigationDelegate = self
         view.addSubview(mainWebView)
         bridge.mainWebView = mainWebView
 
@@ -98,13 +100,10 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
     }
 
     private func startServer() {
-        // Locate bundled web assets in app bundle
-        let webRoot: URL
-        if let res = Bundle.main.url(forResource: "Web", withExtension: nil) {
-            webRoot = res
-        } else {
-            webRoot = Bundle.main.bundleURL
-        }
+        bundledRoot = Bundle.main.url(forResource: "Web", withExtension: nil) ?? Bundle.main.bundleURL
+        let webRoot = WebUpdater.root(bundled: bundledRoot)
+        let running = WebUpdater.version(of: webRoot)
+        Task.detached { await WebUpdater.checkForUpdate(runningVersion: running) }
 
         let s = WebServer(root: webRoot)
         self.server = s
@@ -189,5 +188,28 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
     deinit {
         server?.stop()
         mpvSession?.stop()
+    }
+}
+
+// MARK: - WKNavigationDelegate (web OTA safety net)
+
+extension MainViewController {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        WebUpdater.bootFinished()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        fallBackToBundledWeb()
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        fallBackToBundledWeb()
+    }
+
+    private func fallBackToBundledWeb() {
+        guard let server = server, server.root != bundledRoot else { return }
+        server.root = bundledRoot
+        WebUpdater.discard()
+        mainWebView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(server.port)/index.html")!))
     }
 }

@@ -1,0 +1,39 @@
+# Publishes the web layer to the rolling "web-latest" release; the iOS app downloads it on launch.
+# Native (Swift / libmpv) changes still need a new IPA from ios.yml.
+name: web-ota
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'player.html'
+      - '*.js'
+      - 'icon.svg'
+      - 'icon-512.png'
+      - 'manifest.webmanifest'
+      - '.github/workflows/web-ota.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the OTA bundle
+        env:
+          TRAKT_ID: ${{ secrets.TRAKT_ID }}
+        run: |
+          mkdir ota
+          cp index.html player.html app.js protocol.js sync.js playback.js look.js trakt.js diag.js icon.svg icon-512.png manifest.webmanifest sw.js ota/
+          node -e 'console.log("export default " + JSON.stringify({ id: process.env.TRAKT_ID || "" }) + ";")' > ota/trakt-config.js
+          files=$(cd ota && ls | node -e 'console.log(JSON.stringify(require("fs").readFileSync(0, "utf8").split("\n").filter(Boolean)))')
+          echo "{\"version\": $(git log -1 --format=%ct), \"files\": $files}" > ota/web-manifest.json
+      - name: Publish to web-latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view web-latest >/dev/null 2>&1 || gh release create web-latest --prerelease --title "Web OTA (rolling)" --notes "Rolling web bundle the iOS app downloads on launch. Not a versioned release."
+          gh release upload web-latest ota/* --clobber

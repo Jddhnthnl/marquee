@@ -7,7 +7,7 @@ import Network
 final class WebServer {
     private var listener: NWListener?
     private(set) var port: UInt16 = 0
-    private let root: URL
+    var root: URL
     private let queue = DispatchQueue(label: "webserver", qos: .userInitiated)
 
     init(root: URL) {

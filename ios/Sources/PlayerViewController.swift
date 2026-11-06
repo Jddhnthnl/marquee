@@ -58,7 +58,8 @@ final class PlayerViewController: UIViewController {
     @objc private func play() {
         field.resignFirstResponder()
         guard let h = mpv, let url = field.text, !url.isEmpty else { return }
-        let owned: [UnsafeMutablePointer<CChar>?] = ["loadfile", url, "replace"].map { strdup($0) }
+        let words: [String] = ["loadfile", url, "replace"]
+        let owned: [UnsafeMutablePointer<CChar>?] = words.map { strdup($0) }
         var args: [UnsafePointer<CChar>?] = owned.map { UnsafePointer<CChar>($0) }
         args.append(nil)
         defer { owned.forEach { free($0) } }

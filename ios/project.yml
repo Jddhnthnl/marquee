@@ -1,0 +1,36 @@
+name: Marquee
+options:
+  bundleIdPrefix: dev.marquee
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  MPVKit:
+    url: https://github.com/mpvkit/MPVKit
+    exactVersion: 0.41.0-n8.1.2
+targets:
+  Marquee:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: MPVKit
+        product: MPVKit
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Marquee
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.marquee.app
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"

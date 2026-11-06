@@ -18,7 +18,7 @@ final class PlayerViewController: UIViewController {
         metalLayer.backgroundColor = UIColor.black.cgColor
         view.layer.addSublayer(metalLayer)
 
-        field.text = "https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_480p_h264.mov"
+        field.text = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8"
         field.borderStyle = .roundedRect
         field.autocapitalizationType = .none
         field.autocorrectionType = .no

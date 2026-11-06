@@ -64,6 +64,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
+          export VER=$(node -p 'require("./src-tauri/tauri.conf.json").version').$GITHUB_RUN_NUMBER
           export SIZE=$(stat -f%z ios/Marquee.ipa)
           node -e '
             const e = process.env, v = e.VER, date = new Date().toISOString();

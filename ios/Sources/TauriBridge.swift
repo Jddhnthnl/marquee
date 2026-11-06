@@ -122,7 +122,7 @@ final class TauriBridge: NSObject, WKScriptMessageHandler {
                 case .success(let val):
                     resolve(id: id, webView: webView, result: val ?? NSNull())
                 case .failure(let err):
-                    resolve(id: id, webView: webView, error: err)
+                    resolve(id: id, webView: webView, error: err.message)
                 }
             } else {
                 resolve(id: id, webView: webView, error: "Nothing is playing.")

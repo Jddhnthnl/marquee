@@ -146,7 +146,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
 
         mpvSession?.start(url: url, title: title, start: start, headers: headers) { [weak self] res in
             if case .failure(let err) = res {
-                self?.finishPlayback(error: err)
+                self?.finishPlayback(error: err.message)
             }
         }
     }

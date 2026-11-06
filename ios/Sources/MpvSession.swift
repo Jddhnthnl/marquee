@@ -7,6 +7,11 @@ protocol MpvSessionDelegate: AnyObject {
     func mpvDidEnd(pos: Double, duration: Double, error: String?)
 }
 
+struct MpvError: Error, LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 final class MpvSession {
     private var mpv: OpaquePointer?
     private weak var metalLayer: MetalLayer?
@@ -43,16 +48,18 @@ final class MpvSession {
         self.metalLayer = metalLayer
     }
 
-    func start(url: String, title: String?, start: Double?, headers: [String]?, completion: @escaping (Result<Void, String>) -> Void) {
+    func start(url: String, title: String?, start: Double?, headers: [String]?, completion: @escaping (Result<Void, MpvError>) -> Void) {
         stop()
 
         guard let layer = metalLayer else {
-            completion(.failure("Metal layer missing"))
+            completion(.failure(MpvError(message: "Metal layer missing")))
             return
         }
 
         guard let h = mpv_create() else {
-            completion(.failure("mpv_create failed"))
+            completion(.failure(MpvError(message: "mpv_create failed")))
+            return
+        }
             return
         }
         self.mpv = h
@@ -101,7 +108,7 @@ final class MpvSession {
             let msg = String(cString: mpv_error_string(rc))
             self.mpv = nil
             mpv_terminate_destroy(h)
-            completion(.failure("mpv_initialize failed: \(msg)"))
+            completion(.failure(MpvError(message: "mpv_initialize failed: \(msg)")))
             return
         }
 
@@ -115,8 +122,8 @@ final class MpvSession {
         completion(.success(()))
     }
 
-    func command(_ args: [Any]) -> Result<Any?, String> {
-        guard let h = mpv else { return .failure("Nothing is playing.") }
+    func command(_ args: [Any]) -> Result<Any?, MpvError> {
+        guard let h = mpv else { return .failure(MpvError(message: "Nothing is playing.")) }
         let words: [String] = args.map { arg in
             if let b = arg as? Bool { return b ? "yes" : "no" }
             return String(describing: arg)
@@ -128,7 +135,7 @@ final class MpvSession {
 
         let rc = mpv_command(h, &cArgs)
         if rc < 0 {
-            return .failure(String(cString: mpv_error_string(rc)))
+            return .failure(MpvError(message: String(cString: mpv_error_string(rc))))
         }
         return .success(nil)
     }
@@ -237,7 +244,7 @@ final class MpvSession {
         case MPV_FORMAT_FLAG:
             return node.u.flag != 0
         case MPV_FORMAT_INT64:
-            return node.u.int64_
+            return node.u.int64
         case MPV_FORMAT_DOUBLE:
             return node.u.double_
         case MPV_FORMAT_STRING, MPV_FORMAT_OSD_STRING:

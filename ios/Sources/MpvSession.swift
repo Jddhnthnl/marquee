@@ -60,8 +60,6 @@ final class MpvSession {
             completion(.failure(MpvError(message: "mpv_create failed")))
             return
         }
-            return
-        }
         self.mpv = h
         self.currentUrl = url
         self.initialStart = start ?? 0.0

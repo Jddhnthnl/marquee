@@ -8,6 +8,7 @@ final class PlayerViewController: UIViewController {
     private let queue = DispatchQueue(label: "mpv", qos: .userInitiated)
     private let field = UITextField()
     private let status = UILabel()
+    private let playButton = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -28,7 +29,12 @@ final class PlayerViewController: UIViewController {
         status.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         status.numberOfLines = 4
         status.text = "Marquee iOS spike: paste a stream URL and press Go"
-        [field, status].forEach { view.addSubview($0) }
+        playButton.setTitle("Play", for: .normal)
+        playButton.setTitleColor(.white, for: .normal)
+        playButton.backgroundColor = .systemBlue
+        playButton.layer.cornerRadius = 8
+        playButton.addTarget(self, action: #selector(play), for: .touchUpInside)
+        [field, playButton, status].forEach { view.addSubview($0) }
 
         setupMpv()
     }
@@ -37,7 +43,8 @@ final class PlayerViewController: UIViewController {
         super.viewDidLayoutSubviews()
         let safe = view.safeAreaInsets
         metalLayer.frame = view.bounds
-        field.frame = CGRect(x: 12, y: safe.top + 8, width: view.bounds.width - 24, height: 36)
+        field.frame = CGRect(x: 12, y: safe.top + 8, width: view.bounds.width - 96, height: 36)
+        playButton.frame = CGRect(x: view.bounds.width - 76, y: safe.top + 8, width: 64, height: 36)
         status.frame = CGRect(x: 12, y: view.bounds.height - safe.bottom - 70, width: view.bounds.width - 24, height: 62)
     }
 

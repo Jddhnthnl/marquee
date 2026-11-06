@@ -14,11 +14,17 @@ final class WebServer {
         self.root = root
     }
 
+    static let preferredPort: UInt16 = 8080
+
     func start(completion: @escaping (Result<UInt16, Error>) -> Void) {
+        start(on: WebServer.preferredPort, fallback: true, completion: completion)
+    }
+
+    private func start(on port: UInt16, fallback: Bool, completion: @escaping (Result<UInt16, Error>) -> Void) {
         do {
             let tcpOptions = NWProtocolTCP.Options()
             let params = NWParameters(tls: nil, tcp: tcpOptions)
-            params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+            params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
             params.allowLocalEndpointReuse = true
             let l = try NWListener(using: params)
             self.listener = l
@@ -28,15 +34,22 @@ final class WebServer {
                 guard let self = self else { return }
                 switch state {
                 case .ready:
-                    if !completed, let port = l.port?.rawValue {
+                    if !completed, let actualPort = l.port?.rawValue {
                         completed = true
-                        self.port = port
-                        completion(.success(port))
+                        self.port = actualPort
+                        completion(.success(actualPort))
                     }
                 case .failed(let err):
                     if !completed {
                         completed = true
-                        completion(.failure(err))
+                        l.cancel()
+                        self.listener = nil
+                        if fallback && port != 0 {
+                            // If preferred port is occupied, try .any as a fallback
+                            self.start(on: 0, fallback: false, completion: completion)
+                        } else {
+                            completion(.failure(err))
+                        }
                     }
                 default:
                     break
@@ -49,7 +62,11 @@ final class WebServer {
 
             l.start(queue: queue)
         } catch {
-            completion(.failure(error))
+            if fallback && port != 0 {
+                start(on: 0, fallback: false, completion: completion)
+            } else {
+                completion(.failure(error))
+            }
         }
     }
 

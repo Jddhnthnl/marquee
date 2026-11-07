@@ -18,7 +18,11 @@
   #stage { position: fixed; inset: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
   .chrome { transition: opacity .3s ease; }
   header, footer { transition: opacity .3s ease, translate .4s cubic-bezier(.2,.8,.2,1); }
+  /* the gradient padding covers most of a landscape phone, so only the controls themselves take touches; the rest reaches #stage gestures */
+  header, footer { pointer-events: none; }
+  header > *, footer > * { pointer-events: auto; }
   body.idle .chrome { opacity: 0; pointer-events: none; }
+  body.idle .chrome > * { pointer-events: none; }
   body.idle header { translate: 0 -10px; }
   body.idle footer { translate: 0 14px; }
 

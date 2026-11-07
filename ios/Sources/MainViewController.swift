@@ -162,12 +162,15 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         let headers = args["headers"] as? [String]
 
         isPlaying = true
-        // the opaque main page sits above the Metal layer, so it must clear out for the video to show
-        mainWebView.alpha = 0
         mainWebView.isUserInteractionEnabled = false
         playerWebView.isHidden = false
         playerWebView.isUserInteractionEnabled = true
+        // fade the player (splash first) in over the page, then drop the page out of compositing
+        stage.alpha = 0
         view.bringSubviewToFront(stage)
+        UIView.animate(withDuration: 0.35, delay: 0, options: .curveEaseOut, animations: { self.stage.alpha = 1 }) { _ in
+            if self.isPlaying { self.mainWebView.alpha = 0 }
+        }
 
         if let purl = playerUrl {
             playerWebView.load(URLRequest(url: purl))
@@ -195,12 +198,15 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
             bridge.resolve(id: id, webView: mainWebView, result: [pos, duration])
         }
 
-        mainWebView.alpha = 1
         mainWebView.isUserInteractionEnabled = true
-        playerWebView.isHidden = true
         playerWebView.isUserInteractionEnabled = false
-        playerWebView.loadHTMLString("", baseURL: nil)
+        mainWebView.alpha = 0
         view.bringSubviewToFront(mainWebView)
+        UIView.animate(withDuration: 0.3, delay: 0, options: .curveEaseOut, animations: { self.mainWebView.alpha = 1 }) { _ in
+            guard !self.isPlaying else { return } // a new play started during the fade
+            self.playerWebView.isHidden = true
+            self.playerWebView.loadHTMLString("", baseURL: nil)
+        }
     }
 
     // MARK: - MpvSessionDelegate

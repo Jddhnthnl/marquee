@@ -766,14 +766,12 @@ let clickTimer;
 $('#stage').addEventListener('click', () => {
   if (menuOpen()) { closeMenus(); closePanel(); return; }
   clearTimeout(clickTimer);
-  clickTimer = setTimeout(() => { togglePause(); flash(s.pause ? 'pause' : 'play'); }, 220);
+  clickTimer = setTimeout(() => { togglePause(); flash(s.pause ? 'pause' : 'play'); }, 300);
 });
 let touch = null, swiped = false, held = false, holdT;
 $('#stage').addEventListener('dblclick', (e) => {
   clearTimeout(clickTimer);
-  if (!touch) return toggleFull();
-  const d = e.clientX < innerWidth / 2 ? -10 : 10;
-  cmd('seek', d); toast(`${d > 0 ? '+' : ''}${d}s`);
+  if (!touch) toggleFull();
 });
 // Touch: vertical swipe = brightness (left half) / volume (right half), hold = 2x speed
 $('#stage').addEventListener('pointerdown', (e) => {
@@ -797,9 +795,21 @@ $('#stage').addEventListener('pointermove', async (e) => {
     cmd('set_property', 'volume', v); localStorage.setItem('player_volume', v); toast(`Volume ${v}%`);
   }
 });
-const touchEnd = () => { clearTimeout(holdT); if (held) { cmd('set_property', 'speed', 1); toast('1×'); } };
+// iOS WebKit doesn't fire dblclick for touch, so detect the second tap here
+let lastTap = null, tapSeeked = false;
+const touchEnd = (e) => {
+  clearTimeout(holdT);
+  if (held) { cmd('set_property', 'speed', 1); toast('1×'); }
+  if (!touch || swiped || held || e.type !== 'pointerup') return;
+  const now = Date.now(), left = e.clientX < innerWidth / 2;
+  if (lastTap && now - lastTap.t < 280 && lastTap.left === left) {
+    lastTap = null; tapSeeked = true;
+    const d = left ? -10 : 10;
+    cmd('seek', d); toast(`${d > 0 ? '+' : ''}${d}s`);
+  } else lastTap = { t: now, left };
+};
 $('#stage').addEventListener('pointerup', touchEnd); $('#stage').addEventListener('pointercancel', touchEnd);
-$('#stage').addEventListener('click', (e) => { if (swiped || held) { swiped = held = false; e.stopImmediatePropagation(); clearTimeout(clickTimer); } }, true);
+$('#stage').addEventListener('click', (e) => { if (swiped || held || tapSeeked) { swiped = held = tapSeeked = false; e.stopImmediatePropagation(); clearTimeout(clickTimer); } }, true);
 $('#stage').addEventListener('wheel', (e) => nudgeVolume(e.deltaY < 0 ? 5 : -5), { passive: true });
 
 function flash(id) { const f = $('#flash'); icon(f, id); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go'); }

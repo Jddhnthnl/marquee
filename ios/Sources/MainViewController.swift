@@ -17,6 +17,10 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         didSet {
             setNeedsStatusBarAppearanceUpdate()
             setNeedsUpdateOfHomeIndicatorAutoHidden()
+            setNeedsUpdateOfSupportedInterfaceOrientations()
+            if isPlaying, let scene = view.window?.windowScene {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in }
+            }
         }
     }
     private var isFullscreen = false {
@@ -39,7 +43,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        return .allButUpsideDown
+        return isPlaying ? .landscape : .allButUpsideDown
     }
 
     override func viewDidLoad() {

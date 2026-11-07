@@ -218,7 +218,9 @@ extension MainViewController {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        fallBackToBundledWeb()
+        mpvSession?.note("[native] web content process terminated, reloading")
+        // a killed WebContent process leaves the opaque view black until something reloads it
+        if webView === mainWebView, server?.root == bundledRoot { webView.reload() } else { fallBackToBundledWeb() }
     }
 
     private func fallBackToBundledWeb() {

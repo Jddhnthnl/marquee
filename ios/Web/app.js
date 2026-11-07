@@ -111,9 +111,10 @@ function hero(meta, { kicker = '', actions = '', withPoster = false } = {}) {
 }
 
 // Ambilight: a huge blurred copy of the current backdrop tints the whole page.
+const IOS = !!window.webkit?.messageHandlers?.tauriInvoke; // only the iOS shim registers this handler
 function ambient(src) {
   const el = $('#ambient');
-  if (!src) return void el.classList.remove('on');
+  if (!src || IOS) return void el.classList.remove('on'); // a 124%-viewport blur(90px) layer at 3x DPR can get WebKit's process killed on phones
   if (el.dataset.src === src) return void el.classList.add('on');
   el.dataset.src = src;
   const img = new Image();
@@ -317,17 +318,25 @@ async function search(q) {
   app.innerHTML = `<section class="page"><form id="sf" class="searchbar" role="search">
       <label for="q" class="sr-only">Search movies and series</label>
       <input id="q" name="q" value="${esc(q)}" placeholder="Search movies and series" autocomplete="off" autofocus>
-    </form><div id="res">${q ? '' : state('Type a title and press Enter.')}</div></section>`;
-  $('#sf').onsubmit = (e) => { e.preventDefault(); location.hash = `#/search/${encodeURIComponent(e.target.q.value.trim())}`; };
-  if (!q) return;
-  const seq = routeSeq;
-  $('#res').innerHTML = row('Searching', '', '<div class="skeleton"></div>'.repeat(6));
-  const results = await Promise.all(searchCatalogs(activeAddons()).map(async (c) => {
-    const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id, { search: q })).catch(() => ({}));
-    return metas.length ? row(TYPE_NAMES[c.catalog.type] ? `Matching ${TYPE_NAMES[c.catalog.type]}` : c.catalog.name, c.manifest.name, metas.map(poster).join('')) : '';
-  }));
-  if (seq !== routeSeq) return; // a newer search or page took over while these loaded
-  $('#res').innerHTML = results.join('') || state(`Nothing matches “${esc(q)}”. Check the spelling, or install an addon with a bigger catalog.`);
+    </form><div id="res">${q ? '' : state('Start typing a title.')}</div></section>`;
+  const input = $('#q'), page = routeSeq;
+  let timer, live = 0;
+  const run = async (term) => {
+    // replaceState, not location.hash: a hash change would re-route and rebuild the input mid-typing
+    history.replaceState(null, '', term ? `#/search/${encodeURIComponent(term)}` : '#/search');
+    const mine = ++live;
+    if (!term) return void ($('#res').innerHTML = state('Start typing a title.'));
+    $('#res').innerHTML = row('Searching', '', '<div class="skeleton"></div>'.repeat(6));
+    const results = await Promise.all(searchCatalogs(activeAddons()).map(async (c) => {
+      const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id, { search: term })).catch(() => ({}));
+      return metas.length ? row(TYPE_NAMES[c.catalog.type] ? `Matching ${TYPE_NAMES[c.catalog.type]}` : c.catalog.name, c.manifest.name, metas.map(poster).join('')) : '';
+    }));
+    if (mine !== live || page !== routeSeq) return; // a newer keystroke or page took over while these loaded
+    $('#res').innerHTML = results.join('') || state(`Nothing matches “${esc(term)}”. Check the spelling, or install an addon with a bigger catalog.`);
+  };
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => run(input.value.trim()), 350); };
+  $('#sf').onsubmit = (e) => { e.preventDefault(); clearTimeout(timer); input.blur(); run(input.value.trim()); };
+  if (q) run(q);
 }
 
 async function fetchMeta(type, id) {
@@ -559,6 +568,7 @@ async function streams(meta, type, videoId, ep, autoplay = false) {
 function play(ctx, stream, quiet = false, file = null) { // file: a finished download plays instead of the link
   const t = streamTarget(stream);
   if (!t) return alert('This stream has no link to play.');
+  if (t.kind === 'magnet' && tauri && settings().torrent && settings().player !== 'external') return playTorrent(ctx, stream, t, quiet);
   if (t.kind !== 'url') { // shortcut: no torrent engine / external player bridge in a browser; Nuvio uses a native engine + libmpv
     return void prompt(t.kind === 'magnet' ? 'This is a torrent. Copy the magnet link into a torrent client:' : 'This stream opens outside Marquee. Copy the link:', t.href);
   }
@@ -644,6 +654,25 @@ const resumeAt = (p) => (p && p.positionMs / p.durationMs < 0.95 ? p.positionMs 
 const mediaTitle = (ctx) => ctx.name + (ctx.season ? ` ${epLabel(ctx.season, ctx.episode)}` : '');
 const seriesEps = (meta) => (meta.videos || []).filter((v) => v.season !== 0)
   .sort((a, b) => a.season - b.season || (a.episode ?? a.number) - (b.episode ?? b.number));
+
+// Built-in torrent engine (Settings > Playback): the Rust side downloads the file in order and serves it on a loopback URL for mpv.
+async function playTorrent(ctx, stream, t, quiet) {
+  const pill = Object.assign(document.createElement('div'), { className: 'ptr on', textContent: 'Connecting to peers…' });
+  pill.setAttribute('role', 'status');
+  document.body.append(pill);
+  const trackers = (stream.sources ?? []).filter((x) => x.startsWith('tracker:')).map((x) => x.slice(8));
+  try {
+    const url = await tauri.core.invoke('torrent_start', { infoHash: stream.infoHash, fileIdx: t.fileIdx ?? null, trackers });
+    pill.remove();
+    return await playMpv(ctx, stream, url, progress()[ctx.videoId], settings().player !== 'mpv', quiet);
+  } catch (e) {
+    if (!quiet) alert(`The built-in torrent engine failed: ${e}`);
+    return false;
+  } finally {
+    pill.remove();
+    tauri.core.invoke('torrent_stop').catch(() => {});
+  }
+}
 
 async function playMpv(ctx, stream, href, saved, embed, quiet) {
   const local = href !== stream.url ? stream : null; // a download: its file failing is no reason to mark the link dead
@@ -1266,7 +1295,8 @@ const sections = (set) => [
       'A regular expression matched against each stream’s name and description, ignoring case. It has to match too.')
     + setRow('Wait for addons', pills('streamWait', [[0, 'Instant'], [5, '5 s'], [10, '10 s'], [-1, 'No limit']], set.streamWait),
       'Instant plays the first good stream that arrives. Slower addons still fill the list so you can switch.')
-    + switchRow('sameGroup', 'Stay with the same release', set.sameGroup, 'The next episode plays from the same source and release group as the last one when it’s there.')),
+    + switchRow('sameGroup', 'Stay with the same release', set.sameGroup, 'The next episode plays from the same source and release group as the last one when it’s there.')
+    + (tauri ? switchRow('torrent', 'Use built-in torrent engine', set.torrent, 'Plays torrent streams without TorBox: Marquee downloads the file in order from peers while you watch, and deletes it when you close the player. Needs a healthy torrent; your IP is visible to peers.') : '')),
   sec('playback', setRow('Next episode', pills('nextDelay', [[0, 'Off'], [5, '5 s'], [10, '10 s'], [15, '15 s']], set.nextDelay), 'A card counts down, then plays the next episode.')
     + setRow('Show the card', pills('nextWhen', NEXT_WHEN, set.nextWhen), 'Credits times come from IntroDB, AniSkip or the file’s chapters. Without them the card shows 30 s before the end.')
     + setRow('Ask “Still watching?”', pills('stillWatching', [[0, 'Never'], [3, 'After 3 episodes']], set.stillWatching), 'Pauses autoplay when you haven’t touched anything for a few episodes in a row.')
@@ -2002,3 +2032,12 @@ addEventListener('touchmove', (e) => {
   if (!on && pull) { pull.remove(); pull = null; }
 }, { passive: true });
 addEventListener('touchend', () => { if (pull) { pull.remove(); pull = null; route(); } pullY = -1; });
+
+// iOS app: the shell downloaded a newer web bundle; it applies after a full restart.
+window.addEventListener('marquee-ota', () => {
+  const t = document.createElement('div');
+  t.textContent = 'Update downloaded. Close and reopen Marquee to apply it.';
+  t.style.cssText = 'position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:99999;max-width:90vw;padding:10px 16px;border-radius:12px;background:#222;color:#fff;font:14px system-ui;box-shadow:0 4px 20px #0008';
+  document.body.append(t);
+  setTimeout(() => t.remove(), 6000);
+});

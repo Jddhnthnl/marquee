@@ -111,9 +111,10 @@ function hero(meta, { kicker = '', actions = '', withPoster = false } = {}) {
 }
 
 // Ambilight: a huge blurred copy of the current backdrop tints the whole page.
+const IOS = !!window.webkit?.messageHandlers?.tauriInvoke; // only the iOS shim registers this handler
 function ambient(src) {
   const el = $('#ambient');
-  if (!src) return void el.classList.remove('on');
+  if (!src || IOS) return void el.classList.remove('on'); // a 124%-viewport blur(90px) layer at 3x DPR can get WebKit's process killed on phones
   if (el.dataset.src === src) return void el.classList.add('on');
   el.dataset.src = src;
   const img = new Image();
@@ -317,17 +318,25 @@ async function search(q) {
   app.innerHTML = `<section class="page"><form id="sf" class="searchbar" role="search">
       <label for="q" class="sr-only">Search movies and series</label>
       <input id="q" name="q" value="${esc(q)}" placeholder="Search movies and series" autocomplete="off" autofocus>
-    </form><div id="res">${q ? '' : state('Type a title and press Enter.')}</div></section>`;
-  $('#sf').onsubmit = (e) => { e.preventDefault(); location.hash = `#/search/${encodeURIComponent(e.target.q.value.trim())}`; };
-  if (!q) return;
-  const seq = routeSeq;
-  $('#res').innerHTML = row('Searching', '', '<div class="skeleton"></div>'.repeat(6));
-  const results = await Promise.all(searchCatalogs(activeAddons()).map(async (c) => {
-    const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id, { search: q })).catch(() => ({}));
-    return metas.length ? row(TYPE_NAMES[c.catalog.type] ? `Matching ${TYPE_NAMES[c.catalog.type]}` : c.catalog.name, c.manifest.name, metas.map(poster).join('')) : '';
-  }));
-  if (seq !== routeSeq) return; // a newer search or page took over while these loaded
-  $('#res').innerHTML = results.join('') || state(`Nothing matches “${esc(q)}”. Check the spelling, or install an addon with a bigger catalog.`);
+    </form><div id="res">${q ? '' : state('Start typing a title.')}</div></section>`;
+  const input = $('#q'), page = routeSeq;
+  let timer, live = 0;
+  const run = async (term) => {
+    // replaceState, not location.hash: a hash change would re-route and rebuild the input mid-typing
+    history.replaceState(null, '', term ? `#/search/${encodeURIComponent(term)}` : '#/search');
+    const mine = ++live;
+    if (!term) return void ($('#res').innerHTML = state('Start typing a title.'));
+    $('#res').innerHTML = row('Searching', '', '<div class="skeleton"></div>'.repeat(6));
+    const results = await Promise.all(searchCatalogs(activeAddons()).map(async (c) => {
+      const { metas = [] } = await getJson(resourceUrl(c.url, 'catalog', c.catalog.type, c.catalog.id, { search: term })).catch(() => ({}));
+      return metas.length ? row(TYPE_NAMES[c.catalog.type] ? `Matching ${TYPE_NAMES[c.catalog.type]}` : c.catalog.name, c.manifest.name, metas.map(poster).join('')) : '';
+    }));
+    if (mine !== live || page !== routeSeq) return; // a newer keystroke or page took over while these loaded
+    $('#res').innerHTML = results.join('') || state(`Nothing matches “${esc(term)}”. Check the spelling, or install an addon with a bigger catalog.`);
+  };
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => run(input.value.trim()), 350); };
+  $('#sf').onsubmit = (e) => { e.preventDefault(); clearTimeout(timer); input.blur(); run(input.value.trim()); };
+  if (q) run(q);
 }
 
 async function fetchMeta(type, id) {

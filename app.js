@@ -684,6 +684,7 @@ async function playMpv(ctx, stream, href, saved, embed, quiet) {
   try {
     await sendPlayerInfo();
     loadSegments(ctx);
+    loadAddonSubs(ctx);
     const [pos, dur] = await tauri.core.invoke('play_mpv', { url: href, title: mediaTitle(ctx), start: resumeAt(saved), headers, embed });
     ok = dur > 0;
     if (ok) { record(playing.ctx, playing.stream, pos, dur); logSession(playing.ctx, playing.from, pos, playing.since); }
@@ -802,6 +803,22 @@ async function loadSegments(ctx) {
     }
   } catch { /* no data: the player falls back to chapter names and the last 30 s */ }
   if (playing?.ctx.videoId === ctx.videoId) { playing.segments = segs; sendPlayerInfo(); }
+}
+
+// Subtitles from addons with a `subtitles` resource, added to mpv as external tracks; the player's pickSub then chooses among them
+async function loadAddonSubs(ctx) {
+  const set = settings(), want = [set.subLang1, set.subLang2].filter(Boolean).flatMap((k) => LANGS[k]?.slice(0, -1) ?? []);
+  const lists = await Promise.all(activeAddons().filter((a) => supports(a.manifest, 'subtitles', ctx.type, ctx.videoId))
+    .map((a) => getJson(resourceUrl(a.url, 'subtitles', ctx.type, ctx.videoId)).then((r) => (r.subtitles ?? []).map((s) => ({ ...s, from: a.manifest.name })), () => [])));
+  const per = {}, subs = lists.flat().filter((s) => s?.url && (!want.length || want.includes(s.lang)) && (per[s.lang] = (per[s.lang] ?? 0) + 1) <= 3).slice(0, 12);
+  for (const s of subs) {
+    const name = Object.values(LANGS).find((l) => l.includes(s.lang))?.at(-1) ?? s.lang ?? 'Unknown';
+    for (let i = 0; i < 20; i++) { // mpv refuses sub-add until the file has loaded
+      await new Promise((r) => setTimeout(r, i ? 1000 : 0));
+      if (playing?.ctx.videoId !== ctx.videoId) return;
+      try { await tauri.core.invoke('mpv_cmd', { args: ['sub-add', s.url, 'auto', `${name} · ${s.from}`, s.lang ?? ''] }); break; } catch { /* not loaded yet */ }
+    }
+  }
 }
 
 function sendPlayerInfo() {
@@ -930,6 +947,7 @@ async function onPlayerRequest(r) {
     if (!say) notify(`Playing ${title}`);
     sendPlayerInfo();
     loadSegments(ctx);
+    loadAddonSubs(ctx); // loadfile replace drops external subs
   }
 }
 

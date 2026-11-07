@@ -19,8 +19,9 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
             setNeedsStatusBarAppearanceUpdate()
             setNeedsUpdateOfHomeIndicatorAutoHidden()
             setNeedsUpdateOfSupportedInterfaceOrientations()
-            if isPlaying, let scene = view.window?.windowScene {
-                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { [weak self] e in self?.mpvSession?.note("[native] landscape request: \(e.localizedDescription)") }
+            // iOS keeps a forced orientation until asked otherwise, so going back must request portrait explicitly
+            if let scene = view.window?.windowScene {
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: isPlaying ? .landscape : .portrait)) { [weak self] e in self?.mpvSession?.note("[native] orientation request: \(e.localizedDescription)") }
             }
             view.setNeedsLayout()
         }

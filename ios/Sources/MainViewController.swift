@@ -3,6 +3,7 @@ import WebKit
 
 final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessionDelegate, WKNavigationDelegate {
     private var metalLayer = MetalLayer()
+    private let stage = UIView() // video + controls; turned by hand when iOS won't rotate (portrait lock)
     private(set) var mpvSession: MpvSession?
     private var server: WebServer?
     private let bridge = TauriBridge()
@@ -19,8 +20,9 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
             setNeedsUpdateOfHomeIndicatorAutoHidden()
             setNeedsUpdateOfSupportedInterfaceOrientations()
             if isPlaying, let scene = view.window?.windowScene {
-                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { _ in }
+                scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscape)) { [weak self] e in self?.mpvSession?.note("[native] landscape request: \(e.localizedDescription)") }
             }
+            view.setNeedsLayout()
         }
     }
     private var isFullscreen = false {
@@ -53,7 +55,9 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         metalLayer.contentsScale = UIScreen.main.nativeScale
         metalLayer.framebufferOnly = true
         metalLayer.backgroundColor = UIColor.black.cgColor
-        view.layer.addSublayer(metalLayer)
+        stage.backgroundColor = .black
+        stage.layer.addSublayer(metalLayer)
+        view.addSubview(stage)
 
         let session = MpvSession(metalLayer: metalLayer)
         session.delegate = self
@@ -67,9 +71,18 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        metalLayer.frame = view.bounds
-        mainWebView.frame = view.bounds
-        playerWebView.frame = view.bounds
+        let b = view.bounds
+        mainWebView.frame = b
+        // with Portrait Orientation Lock on, iOS keeps the interface portrait, so rotate the player ourselves like other video apps
+        let turn = isPlaying && b.height > b.width
+        stage.transform = .identity
+        stage.bounds = CGRect(x: 0, y: 0, width: turn ? b.height : b.width, height: turn ? b.width : b.height)
+        stage.center = CGPoint(x: b.midX, y: b.midY)
+        stage.transform = turn ? CGAffineTransform(rotationAngle: .pi / 2) : .identity
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        metalLayer.frame = stage.bounds
+        CATransaction.commit()
+        playerWebView.frame = stage.bounds
     }
 
     private func setupWebViews() {
@@ -99,7 +112,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         playerWebView.scrollView.contentInsetAdjustmentBehavior = .never
         playerWebView.isHidden = true
         playerWebView.isUserInteractionEnabled = false
-        view.addSubview(playerWebView)
+        stage.addSubview(playerWebView)
         bridge.playerWebView = playerWebView
     }
 
@@ -154,7 +167,7 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         mainWebView.isUserInteractionEnabled = false
         playerWebView.isHidden = false
         playerWebView.isUserInteractionEnabled = true
-        view.bringSubviewToFront(playerWebView)
+        view.bringSubviewToFront(stage)
 
         if let purl = playerUrl {
             playerWebView.load(URLRequest(url: purl))

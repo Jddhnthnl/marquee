@@ -145,6 +145,9 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
         let headers = args["headers"] as? [String]
 
         isPlaying = true
+        // the opaque main page sits above the Metal layer, so it must clear out for the video to show
+        mainWebView.alpha = 0
+        mainWebView.isUserInteractionEnabled = false
         playerWebView.isHidden = false
         playerWebView.isUserInteractionEnabled = true
         view.bringSubviewToFront(playerWebView)
@@ -175,6 +178,8 @@ final class MainViewController: UIViewController, TauriBridgeDelegate, MpvSessio
             bridge.resolve(id: id, webView: mainWebView, result: [pos, duration])
         }
 
+        mainWebView.alpha = 1
+        mainWebView.isUserInteractionEnabled = true
         playerWebView.isHidden = true
         playerWebView.isUserInteractionEnabled = false
         playerWebView.loadHTMLString("", baseURL: nil)

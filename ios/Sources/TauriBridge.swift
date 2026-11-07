@@ -20,6 +20,10 @@ final class TauriBridge: NSObject, WKScriptMessageHandler {
       const callbacks = new Map();
       let nextCallbackId = 1;
 
+      const report = (m) => { try { window.webkit.messageHandlers.tauriInvoke.postMessage({ id: 0, cmd: 'js_error', args: { msg: location.pathname + ': ' + m } }); } catch (e) {} };
+      addEventListener('error', (e) => report(e.message + ' @' + e.lineno));
+      addEventListener('unhandledrejection', (e) => report('rejected: ' + (e.reason && e.reason.message || e.reason)));
+
       window.__TAURI_POST_EVENT__ = (eventName, payload) => {
         const list = listeners.get(eventName);
         if (list) for (const cb of list) { try { cb({ payload }); } catch (e) { console.error(e); } }
@@ -131,6 +135,9 @@ final class TauriBridge: NSObject, WKScriptMessageHandler {
         case "mpv_state":
             let props = delegate?.mpvSession?.props ?? [:]
             resolve(id: id, webView: webView, result: props)
+
+        case "js_error":
+            delegate?.mpvSession?.note("[js] \(args["msg"] as? String ?? "?")")
 
         case "mpv_log":
             let logs = delegate?.mpvSession?.getRecentLogs() ?? ""

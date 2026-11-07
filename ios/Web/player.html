@@ -164,6 +164,15 @@
   .wait { position: fixed; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px; border-radius: 50%; display: none;
     border: 3px solid rgba(237,230,216,.18); border-top-color: var(--lamp); animation: spin .9s linear infinite; }
   body.buffering .wait { display: block; }
+  body.loading .wait { display: none; }
+  .splash { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 28px;
+    background: #0b0e12 center / cover no-repeat; overflow: hidden; }
+  .splash::before { content: ''; position: absolute; inset: 0; background: inherit; filter: blur(28px) brightness(.35); transform: scale(1.1); }
+  .splash > * { position: relative; }
+  .splash img { max-width: min(30rem, 62vw); max-height: 28vh; object-fit: contain; }
+  .splash h2 { margin: 0; font-size: 28px; text-align: center; padding: 0 24px; }
+  .splash .ring { width: 38px; height: 38px; border-radius: 50%; border: 3px solid rgba(237,230,216,.18); border-top-color: var(--lamp); animation: spin .9s linear infinite; }
+  body.loading .splash { display: flex; }
   @keyframes spin { to { transform: rotate(1turn); } }
   /* answers a click on the picture: the new state blooms in the middle and fades */
   .flash { position: fixed; left: 50%; top: 50%; width: 92px; height: 92px; margin: -46px; border-radius: 50%; display: grid;
@@ -222,7 +231,7 @@
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 </style>
 </head>
-<body>
+<body class="loading">
 <div id="stage"></div>
 <svg width="0" height="0" style="position:absolute">
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></symbol>
@@ -245,6 +254,7 @@
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.01"/></symbol>
 </svg>
 
+<div class="splash" id="splash" role="status" aria-label="Loading"><img id="splash-logo" alt="" hidden><h2 id="splash-name" hidden></h2><div class="ring"></div></div>
 <header class="chrome">
   <button class="ib" id="back" aria-label="Back to Marquee (Esc)"><svg><use href="#i-close"/></svg></button>
   <h1 id="title"></h1>
@@ -354,6 +364,7 @@ function render(k) {
     $('#mute').setAttribute('aria-label', s.mute ? 'Unmute (M)' : 'Mute (M)');
   }
   if (k === 'media-title') { $('#title').textContent = s['media-title']; document.title = s['media-title']; newEpisode(); }
+  if (k === 'time-pos' && s['time-pos'] > 0) document.body.classList.remove('loading');
   if (k === 'time-pos' || k === 'eof-reached') timeline();
   if (k === 'paused-for-cache' || k === 'seeking') document.body.classList.toggle('buffering', !!(s['paused-for-cache'] || s.seeking));
   if (info.party && (k === 'pause' || k === 'seeking' && !s.seeking)) ask({ type: 'party' });
@@ -499,6 +510,10 @@ function applyInfo(i) {
     pic = Object.fromEntries(videoProps(o));
     for (const [k, v] of Object.entries(pic)) cmd('set_property', k, v);
   }
+  const sl = $('#splash-logo'), sn = $('#splash-name');
+  sl.hidden = !info.logo; if (info.logo) sl.src = info.logo;
+  sn.hidden = !!info.logo || !info.name; sn.textContent = info.name || '';
+  if (info.poster) $('#splash').style.backgroundImage = `url("${String(info.poster).replace(/["\\\n]/g, '')}")`;
   applySubs();
   $('#eps-btn').hidden = !info.episodes?.length;
   $('#party').hidden = !info.party;
@@ -817,14 +832,14 @@ function showWatching() {
 // Windows sends a move without movement when windows reorder above the player; only real moves wake the controls
 let lastXY = '';
 addEventListener('pointermove', (e) => { const xy = `${e.screenX},${e.screenY}`; if (xy !== lastXY) { lastXY = xy; wake(); } });
-let holdTimer = 0, held = null; // held: the speed to go back to
+let holdTimer = 0, keyHeld = null; // keyHeld: the speed to go back to
 addEventListener('keydown', (e) => {
   if (e.target.matches?.('input[type=range]') && e.key.startsWith('Arrow')) return;
   if (e.target.tagName === 'SELECT' && e.key !== 'Escape') return; // arrows and letters pick a language there
   if (e.key === 'ArrowRight') {
     e.preventDefault(); wake();
-    if (!e.repeat && !holdTimer && held == null) holdTimer = setTimeout(() => {
-      holdTimer = 0; held = s.speed;
+    if (!e.repeat && !holdTimer && keyHeld == null) holdTimer = setTimeout(() => {
+      holdTimer = 0; keyHeld = s.speed;
       const x = opt().holdSpeed; cmd('set_property', 'speed', x); toast(`${x}× while you hold`, 100000);
     }, 350);
     return;
@@ -848,10 +863,10 @@ addEventListener('keydown', (e) => {
 
 addEventListener('keyup', (e) => {
   if (e.key !== 'ArrowRight' || e.target.matches?.('input[type=range]')) return;
-  if (held != null) { cmd('set_property', 'speed', held); held = null; toast('Normal speed'); }
+  if (keyHeld != null) { cmd('set_property', 'speed', keyHeld); keyHeld = null; toast('Normal speed'); }
   else if (holdTimer) { clearTimeout(holdTimer); holdTimer = 0; cmd('seek', 10); toast('Forward 10 seconds'); }
 });
-addEventListener('blur', () => { if (held != null) { cmd('set_property', 'speed', held); held = null; toast('Normal speed'); } clearTimeout(holdTimer); holdTimer = 0; });
+addEventListener('blur', () => { if (keyHeld != null) { cmd('set_property', 'speed', keyHeld); keyHeld = null; toast('Normal speed'); } clearTimeout(holdTimer); holdTimer = 0; });
 
 // State: snapshot first (events before this page loaded are already gone), then live changes
 (async () => {

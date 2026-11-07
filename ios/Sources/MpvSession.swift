@@ -146,6 +146,10 @@ final class MpvSession {
         }
     }
 
+    func note(_ line: String) {
+        DispatchQueue.main.async { self.recentLogs = Array((self.recentLogs + [line]).suffix(50)) }
+    }
+
     func getRecentLogs() -> String {
         return recentLogs.joined(separator: "\n")
     }
@@ -212,6 +216,8 @@ final class MpvSession {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            // unavailable props arrive as null; player.html derefs them unguarded (track-list.find), so keep them out
+            if value is NSNull { self.props.removeValue(forKey: name); return }
             self.props[name] = value
             self.delegate?.mpvEvent(name: name, data: value)
         }
